@@ -32,6 +32,7 @@ import {
 import { generateDailyNewsDigest, getWibInfo } from './news/generator';
 import { fetchAllAvailableModels } from './news/models';
 import { runUnifiedAiCompletion } from './news/ai_client';
+import { runConversationalAgent } from './news/agent';
 import {
   getAllConnectors,
   getConnector,
@@ -163,6 +164,11 @@ function getSessionTokenFromRequest(request: Request): string {
   const cookieHeader = request.headers.get('Cookie') || '';
   const match = /auth_session=([a-f0-9]+)/.exec(cookieHeader);
   return match ? match[1] : '';
+}
+
+function escapeHtml(text: string): string {
+  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return (text || '').replace(/[&<>"']/g, (m) => map[m]);
 }
 
 export default {
@@ -438,6 +444,7 @@ export default {
         } else if (connector.type === 'gmail') {
           const testRes = await executeGmailSend(
             connector,
+            connector.params.recipientEmail || '',
             `[Uji Coba] Technokers Bot Gmail Test`,
             `Halo Admin!\n\nKoneksi ke Google Gmail API berhasil terhubung dari Technokers AI Bot Pro.\n\nWaktu pengujian: ${new Date().toISOString()}`
           );
@@ -486,51 +493,41 @@ export default {
         const adminSessionKey = 'web:admin:1023972475';
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
 
-        // 1. Natural Language Reminder / Custom Cron Intent Detector
-        const reminderRes = await processReminderIntent(
-          env,
-          userMessage,
-          1023972475,
-          'Muhamad Alfian',
-          1023972475,
-          true,
-          'web_dashboard'
-        );
-
-        let replyText = '';
-        if (reminderRes.handled && reminderRes.replyText) {
-          replyText = reminderRes.replyText;
-        } else {
-          // 2. Natural Language Connector Intent Detector
-          const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
-
-          if (intentRes.handled && intentRes.replyText) {
-            replyText = intentRes.replyText;
-          } else {
-            // 3. AI Completion
-            const activeModel = await getActiveModel(env.AI_NEWS_KV);
-            const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+        // Autonomous Conversational Agent with Intelligent Tool & Function Calling!
+        const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
 - Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
 - Sambut admin dengan hangat dan bantu apa pun yang dibutuhkan (analisis tech, kode, ringkasan, maupun konfigurasi bot).
 - Jika admin bertanya seputar menyambungkan ke Google, Blogger, Gmail, atau Webhook, jelaskan bahwa ia dapat mengisi kredensial pada tab Universal Connectors di dashboard ini.
-- Kamu juga bisa disuruh membuat reminder atau cron job secara mandiri (misal: "ingetin aku 10 menit lagi cek email", atau "bikin reminder tiap hari jam 9 pagi").
+- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat reminder/pengingat atau cron job, panggil tool tersebut atau tanyakan konfirmasi secara ramah!
+- Jika pengguna meminta pengingat "disini", kirimkan ke 'web_dashboard'. Jika minta di Telegram, tanyakan username atau chat id Telegram jika belum tersedia.
 
 STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
 1. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
 2. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
 3. Jawaban harus komprehensif, edukatif, dan to the point.`;
 
-            const messagesToSend: ChatMessage[] = [
-              { role: 'system', content: systemPrompt },
-              ...history,
-              { role: 'user', content: userMessage },
-            ];
-
-            const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1500);
-            replyText = aiRes.text;
-          }
+        let replyText = '';
+        const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
+        if (intentRes.handled && intentRes.replyText) {
+          replyText = intentRes.replyText;
+        } else {
+          const agentRes = await runConversationalAgent(
+            env,
+            history,
+            userMessage,
+            {
+              env,
+              userId: 1023972475,
+              userName: 'Muhamad Alfian',
+              chatId: 1023972475,
+              sourcePlatform: 'web_dashboard',
+              isAdmin: true,
+            },
+            systemPrompt
+          );
+          replyText = agentRes.replyText;
         }
 
         const updatedHistory: ChatMessage[] = [

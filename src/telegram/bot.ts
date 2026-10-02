@@ -33,6 +33,7 @@ import {
 import { generateDailyNewsDigest, getWibInfo } from '../news/generator';
 import { fetchAllAvailableModels } from '../news/models';
 import { runUnifiedAiCompletion } from '../news/ai_client';
+import { runConversationalAgent } from '../news/agent';
 import { executeDailyNewsPosting } from '../index';
 import { processConnectorIntent, getAllConnectors } from '../connectors/manager';
 import {
@@ -751,27 +752,8 @@ export async function handleTelegramUpdate(
   }
 
   // ==========================================
-  // NATURAL LANGUAGE REMINDER & CRON INTENT
-  // e.g. "ingetin aku 15 menit lagi...", "bikin reminder besok jam 7 pagi..."
-  // ==========================================
-  const reminderIntent = await processReminderIntent(
-    env,
-    text,
-    userId,
-    userName,
-    chatId,
-    userIsAdmin,
-    'telegram'
-  );
-  if (reminderIntent.handled && reminderIntent.replyText) {
-    await sendTelegramMessage(token, chatId, reminderIntent.replyText, {
-      replyToMessageId: msg.message_id,
-    });
-    return;
-  }
-
-  // ==========================================
-  // REGULAR CONVERSATION CHAT (With Thread / User Isolation & Daily Limit)
+  // REGULAR CONVERSATION CHAT (With Autonomous Tool & Function Calling)
+  // Let the AI decide when to set reminders, ask clarification questions, or reply!
   // ==========================================
   const chatPerm = await checkUserChatPermission(env.AI_NEWS_KV, userId, dateStr);
   if (!chatPerm.allowed) {
@@ -794,13 +776,13 @@ export async function handleTelegramUpdate(
 
   try {
     const history = await getIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
-    const activeModel = await getActiveModel(env.AI_NEWS_KV);
 
     const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang berbicara secara privat dengan pengguna bernama "${userName}" (${userHandle || 'ID: ' + userId}).
 - Sesi percakapan ini sepenuhnya terisolasi dan spesifik untuk pengguna ini. JANGAN PERNAH mencampur adukkan topik atau data dari pengguna lain!
 - Panggil nama pengguna dengan ramah jika relevan ("Halo ${userName}", dll).
+- Jika pengguna meminta pengingat atau menyebut kegiatan yang akan datang, kamu dapat memutuskan secara mandiri apakah harus memanggil tool 'set_reminder' atau bertanya secara ramah apakah mereka mau diingatkan!
 
 STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
 1. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan mudah dipahami.
@@ -809,14 +791,22 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
 4. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
 5. Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
 
-    const messagesToSend: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...history,
-      { role: 'user', content: text },
-    ];
+    const agentResult = await runConversationalAgent(
+      env,
+      history,
+      text,
+      {
+        env,
+        userId,
+        userName,
+        chatId,
+        sourcePlatform: 'telegram',
+        isAdmin: userIsAdmin,
+      },
+      systemPrompt
+    );
 
-    const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1200);
-    const replyText = aiRes.text;
+    const replyText = agentResult.replyText;
 
     const updatedHistory: ChatMessage[] = [
       ...history,
