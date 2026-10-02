@@ -1,6 +1,7 @@
 import { ScheduledJob, JobPlatform } from './types';
 import { saveJob, getAllJobs, deleteJob, resolveTelegramChatId } from './manager';
 import { getWibDate, wibComponentsToEpoch } from './parser';
+import { stripEmojis, escapeHtml } from '../utils/text';
 
 export interface ToolExecutionContext {
   env: Env;
@@ -287,13 +288,7 @@ export async function executeSchedulerTool(
     return {
       toolName: name,
       success: true,
-      message:
-        `✅ <b>Pengingat Berhasil Diatur!</b>\n\n` +
-        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
-        `⏰ <b>Waktu:</b> ${humanSchedule}\n` +
-        `🎯 <b>Tujuan Notifikasi:</b> ${targetLabel}\n` +
-        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
-        `🔔 Aku akan ingetin kamu tepat pada waktunya!`,
+      message: `Pengingat berhasil dijadwalkan untuk "${newJob.message}" pada ${humanSchedule} (${targetLabel}).`,
       data: newJob,
     };
   }
@@ -344,13 +339,7 @@ export async function executeSchedulerTool(
     return {
       toolName: name,
       success: true,
-      message:
-        `🎉 <b>Jadwal Otomatis (Cron Job) Berhasil Dibuat!</b>\n\n` +
-        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
-        `⏰ <b>Jadwal:</b> ${scheduleDesc}\n` +
-        `🔄 <b>Pola Cron:</b> <code>${cronExpr}</code>\n` +
-        `🎯 <b>Tujuan:</b> ${targetLabel}\n` +
-        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>`,
+      message: `Jadwal otomatis berhasil dibuat untuk "${newJob.message}" dengan jadwal ${scheduleDesc} (${targetLabel}).`,
       data: newJob,
     };
   }
@@ -370,15 +359,14 @@ export async function executeSchedulerTool(
 
     const jobLines = activeJobs.map(
       (j, idx) =>
-        `${idx + 1}. [${j.type === 'cron' ? 'CRON' : 'REMINDER'}] <b>${escapeHtml(j.message)}</b>\n` +
-        `   🕒 <i>${escapeHtml(j.scheduleRaw)}</i> &bull; 🎯 <i>${j.targetPlatform === 'dashboard' ? 'Web Dashboard' : 'Telegram (' + j.targetChatId + ')'}</i>\n` +
-        `   🆔 <code>${j.id}</code>`
+        `${idx + 1}. [${j.type === 'cron' ? 'Jadwal Rutin' : 'Pengingat'}] <b>${escapeHtml(j.message)}</b>\n` +
+        `   Waktu: <i>${escapeHtml(j.scheduleRaw)}</i> &bull; Target: <i>${j.targetPlatform === 'dashboard' ? 'Web Dashboard' : 'Telegram'}</i>`
     );
 
     return {
       toolName: name,
       success: true,
-      message: `📋 <b>Daftar Jadwal & Pengingat Aktif (${activeJobs.length}):</b>\n\n${jobLines.join('\n\n')}`,
+      message: `<b>Daftar Jadwal & Pengingat Aktif (${activeJobs.length}):</b>\n\n${jobLines.join('\n\n')}`,
       data: activeJobs,
     };
   }
@@ -390,7 +378,7 @@ export async function executeSchedulerTool(
       return {
         toolName: name,
         success: false,
-        message: 'Mohon sebutkan Job ID pengingat yang ingin dibatalkan.',
+        message: 'Mohon sebutkan ID pengingat yang ingin dibatalkan.',
       };
     }
 
@@ -398,7 +386,7 @@ export async function executeSchedulerTool(
     return {
       toolName: name,
       success: delRes.success,
-      message: delRes.message,
+      message: stripEmojis(delRes.message),
     };
   }
 
@@ -407,9 +395,4 @@ export async function executeSchedulerTool(
     success: false,
     message: `Alat '${name}' tidak dikenali.`,
   };
-}
-
-function escapeHtml(text: string): string {
-  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-  return text.replace(/[&<>"']/g, (m) => map[m]);
 }

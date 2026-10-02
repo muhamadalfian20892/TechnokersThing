@@ -8,6 +8,7 @@ import {
   ToolExecutionContext,
 } from '../scheduler/tools';
 import { getWibDate } from '../scheduler/parser';
+import { stripEmojis } from '../utils/text';
 
 export interface AgentResponse {
   replyText: string;
@@ -16,7 +17,7 @@ export interface AgentResponse {
 
 /**
  * Unified Conversational Agent with Intelligent Tool & Function Calling
- * Let the AI decide when to set reminders, ask clarification questions, or reply conversationally!
+ * Screen-reader friendly, WCAG 2.1 AAA compliant (zero emojis, natural spoken confirmation).
  */
 export async function runConversationalAgent(
   env: Env,
@@ -43,8 +44,10 @@ USER: ${context.userName} (ID: ${context.userId}, Admin: ${context.isAdmin ? 'YA
 
 ${SCHEDULER_SYSTEM_PROMPT_INSTRUCTIONS}
 
-STANDAR AKSESIBILITAS WCAG 2.1 AAA:
-- Format jawaban dengan hierarki rapi, kontras, gunakan format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>).
+STANDAR AKSESIBILITAS WCAG 2.1 AAA & SCREEN READER:
+- DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada simbol grafis/emoticon). Ini wajib demi kenyamanan pengguna tuna netra / screen reader.
+- JANGAN menyebutkan kode hash, job ID, atau nomor teknis internal apa pun saat mengonfirmasi pengingat atau jadwal kepada pengguna! Berbicaralah santai dan alami seperti teman (misal: "Siap, kamu bakal aku ingetin 1 menit lagi ya!").
+- Format jawaban dengan hierarki rapi, kontras, gunakan format HTML resmi jika perlu (<b>tebal</b>, <i>miring</i>, <code>kode</code>).
 - Berikan respon yang hangat, cerdas, bersahabat, to-the-point, dan edukatif.
 `.trim();
 
@@ -69,28 +72,62 @@ STANDAR AKSESIBILITAS WCAG 2.1 AAA:
   // When AI decides to call functions/tools
   if (toolCalls.length > 0) {
     const toolResults: string[] = [];
+    let needsClarificationMessage = '';
 
     for (const tc of toolCalls) {
       toolCallsExecuted.push(tc.name);
       const res = await executeSchedulerTool(tc.name, tc.arguments, context);
 
       if (res.needsClarification && res.clarificationQuestion) {
-        toolResults.push(res.clarificationQuestion);
+        needsClarificationMessage = res.clarificationQuestion;
       } else if (res.message) {
         toolResults.push(res.message);
       }
     }
 
-    const finalReply = toolResults.join('\n\n') || aiRes.text;
-    return {
-      replyText: finalReply,
-      toolCallsExecuted,
-    };
+    if (needsClarificationMessage) {
+      return {
+        replyText: stripEmojis(needsClarificationMessage),
+        toolCallsExecuted,
+      };
+    }
+
+    // Generate natural, friendly confirmation without technical IDs or emojis
+    const toolSummary = toolResults.join('\n');
+    const followupMessages: ChatMessage[] = [
+      ...messagesToSend,
+      { role: 'assistant', content: aiRes.text || `Memproses permintaan...` },
+      {
+        role: 'system',
+        content: `Hasil eksekusi alat: ${toolSummary}
+
+TUGASMU:
+Sampaikan konfirmasi ini kepada pengguna secara santai, ramah, mengalir, dan alami dalam Bahasa Indonesia.
+ATURAN MUTLAK AKSESIBILITAS WCAG 2.1 AAA:
+1. DILARANG MENGGUNAKAN EMOJI SAMA SEKALI (demi pembaca layar/screen reader).
+2. JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem apa pun.
+3. Bicaralah wajar dan bersahabat (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!", atau "Beres, pengingat buat makan sudah aku pasang ya.").`,
+      },
+    ];
+
+    try {
+      const followupRes = await runUnifiedAiCompletion(env, activeModel, followupMessages, 400);
+      const cleanReply = stripEmojis(followupRes.text.trim()) || stripEmojis(toolSummary);
+      return {
+        replyText: cleanReply,
+        toolCallsExecuted,
+      };
+    } catch {
+      return {
+        replyText: stripEmojis(toolSummary),
+        toolCallsExecuted,
+      };
+    }
   }
 
   // When AI decides to converse normally (or ask "kamu mau diingetin gak?")
   return {
-    replyText: aiRes.text,
+    replyText: stripEmojis(aiRes.text),
     toolCallsExecuted: [],
   };
 }

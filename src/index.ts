@@ -33,6 +33,7 @@ import { generateDailyNewsDigest, getWibInfo } from './news/generator';
 import { fetchAllAvailableModels } from './news/models';
 import { runUnifiedAiCompletion } from './news/ai_client';
 import { runConversationalAgent } from './news/agent';
+import { stripEmojis } from './utils/text';
 import {
   getAllConnectors,
   getConnector,
@@ -503,15 +504,17 @@ KONTEKS PENGGUNA TERISOLASI:
 - Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat reminder/pengingat atau cron job, panggil tool tersebut atau tanyakan konfirmasi secara ramah!
 - Jika pengguna meminta pengingat "disini", kirimkan ke 'web_dashboard'. Jika minta di Telegram, tanyakan username atau chat id Telegram jika belum tersedia.
 
-STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
-1. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
-2. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
-3. Jawaban harus komprehensif, edukatif, dan to the point.`;
+STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
+1. DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun) demi kenyamanan pengguna tuna netra dan pembaca layar (screen reader).
+2. JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").
+3. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
+4. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
+5. Jawaban harus komprehensif, edukatif, dan to the point.`;
 
         let replyText = '';
         const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
         if (intentRes.handled && intentRes.replyText) {
-          replyText = intentRes.replyText;
+          replyText = stripEmojis(intentRes.replyText);
         } else {
           const agentRes = await runConversationalAgent(
             env,
@@ -527,7 +530,7 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
             },
             systemPrompt
           );
-          replyText = agentRes.replyText;
+          replyText = stripEmojis(agentRes.replyText);
         }
 
         const updatedHistory: ChatMessage[] = [
@@ -1589,20 +1592,20 @@ function renderAdminDashboard(data: {
                 <div style="background: #050811; border: 2px solid var(--border); border-radius: 10px; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
                   <div style="flex: 1; min-width: 250px;">
                     <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap;">
-                      <span class="badge ${j.type === 'cron' ? 'badge-primary' : 'badge-success'}">${j.type === 'cron' ? '🔄 CRON' : '⏰ REMINDER'}</span>
+                      <span class="badge ${j.type === 'cron' ? 'badge-primary' : 'badge-success'}">${j.type === 'cron' ? 'CRON' : 'REMINDER'}</span>
                       <span class="badge ${j.status === 'active' ? 'badge-success' : 'badge-muted'}">${j.status.toUpperCase()}</span>
                       <code>${j.id}</code>
                     </div>
                     <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-bottom: 0.35rem;">${escapeHtml(j.message)}</div>
                     <div style="font-size: 0.9rem; color: #cbd5e1;">
-                      🕒 Jadwal: <b>${escapeHtml(j.scheduleRaw || '')}</b> ${j.cronExpression ? `(<code>${j.cronExpression}</code>)` : ''} &bull; 
-                      🎯 Target: <b>${j.targetPlatform === 'dashboard' || String(j.targetChatId) === 'dashboard' ? 'Web Dashboard (Di sini)' : (String(j.targetChatId) === String(data.channelId) ? 'Channel ' + data.channelId : 'Telegram (' + j.targetChatId + ')')}</b> &bull;
-                      📊 Eksekusi: <b>${j.runCount || 0}x</b>
+                      Jadwal: <b>${escapeHtml(j.scheduleRaw || '')}</b> ${j.cronExpression ? `(<code>${j.cronExpression}</code>)` : ''} &bull; 
+                      Target: <b>${j.targetPlatform === 'dashboard' || String(j.targetChatId) === 'dashboard' ? 'Web Dashboard (Di sini)' : (String(j.targetChatId) === String(data.channelId) ? 'Channel ' + data.channelId : 'Telegram (' + j.targetChatId + ')')}</b> &bull;
+                      Eksekusi: <b>${j.runCount || 0}x</b>
                     </div>
                   </div>
                   <div style="display: flex; gap: 0.5rem;">
-                    <button class="btn btn-secondary" style="min-height: 40px; padding: 0.5rem 1rem;" onclick="testCustomJob('${j.id}')">🚀 Uji Kirim</button>
-                    <button class="btn btn-danger" style="min-height: 40px; padding: 0.5rem 1rem;" onclick="deleteCustomJob('${j.id}')">🗑️ Hapus</button>
+                    <button class="btn btn-secondary" style="min-height: 40px; padding: 0.5rem 1rem;" onclick="testCustomJob('${j.id}')">Uji Kirim</button>
+                    <button class="btn btn-danger" style="min-height: 40px; padding: 0.5rem 1rem;" onclick="deleteCustomJob('${j.id}')">Hapus</button>
                   </div>
                 </div>`
                 )

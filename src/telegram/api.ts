@@ -1,3 +1,5 @@
+import { stripEmojis } from '../utils/text';
+
 export interface TelegramResponse<T> {
   ok: boolean;
   result?: T;
@@ -50,9 +52,11 @@ async function sendSingleMessage(
 ): Promise<{ ok: boolean; messageId?: number; description?: string }> {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
+  const cleanText = stripEmojis(text);
+
   const payload: Record<string, unknown> = {
     chat_id: chatId,
-    text,
+    text: cleanText,
     parse_mode: options?.parseMode ?? 'HTML',
     disable_web_page_preview: options?.disableWebPagePreview ?? true,
   };

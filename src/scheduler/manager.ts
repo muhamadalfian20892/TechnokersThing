@@ -68,12 +68,12 @@ export async function deleteJob(
   }
 
   if (!isAdmin && String(target.creatorId) !== String(requesterId)) {
-    return { success: false, message: '⛔ Anda hanya dapat menghapus jadwal yang Anda buat sendiri.' };
+    return { success: false, message: 'Anda hanya dapat menghapus jadwal yang Anda buat sendiri.' };
   }
 
   const updated = jobs.filter((j) => j.id !== id);
   await kv.put(KV_JOBS_KEY, JSON.stringify(updated));
-  return { success: true, message: `✅ Jadwal <code>${id}</code> ("${target.message}") berhasil dihapus.` };
+  return { success: true, message: `Jadwal <code>${id}</code> ("${target.message}") berhasil dihapus.` };
 }
 
 export async function getUserJobs(kv: KVNamespace, userId: string | number): Promise<ScheduledJob[]> {
@@ -194,34 +194,21 @@ export async function resolveTelegramChatId(
 // 3. Notification Message Formatters (WCAG 2.1 AAA Compliant)
 // ==========================================
 export function formatReminderNotification(job: ScheduledJob): string {
-  const targetDesc =
-    job.targetPlatform === 'dashboard'
-      ? 'Web Dashboard (Di sini)'
-      : String(job.targetChatId);
-
   return (
-    `⏰ <b>PENGINGAT (REMINDER)</b>\n\n` +
-    `Halo! Ini adalah pengingat yang Anda jadwalkan:\n` +
-    `📌 <b>Pesan:</b> ${escapeHtml(job.message)}\n\n` +
-    `🕒 <i>Jadwal: ${job.scheduleRaw}</i>\n` +
-    `🎯 <i>Target: ${targetDesc}</i> &bull; 🆔 <code>${job.id}</code>`
+    `<b>Pengingat:</b>\n\n` +
+    `${escapeHtml(job.message)}\n\n` +
+    `<i>Jadwal: ${escapeHtml(job.scheduleRaw)}</i>`
   );
 }
 
 export function formatCronNotification(job: ScheduledJob): string {
   const wib = getWibDate();
   const timeStr = `${String(wib.getUTCHours()).padStart(2, '0')}:${String(wib.getUTCMinutes()).padStart(2, '0')} WIB`;
-  const targetDesc =
-    job.targetPlatform === 'dashboard'
-      ? 'Web Dashboard (Di sini)'
-      : String(job.targetChatId);
 
   return (
-    `🔔 <b>JADWAL OTOMATIS (CRON JOB)</b>\n\n` +
-    `📢 <b>Pesan:</b> ${escapeHtml(job.message)}\n\n` +
-    `⏱️ <b>Waktu Eksekusi:</b> ${timeStr}\n` +
-    `🔄 <b>Pola:</b> <code>${job.cronExpression || job.scheduleRaw}</code>\n` +
-    `🎯 <i>Target: ${targetDesc}</i> &bull; 📊 <i>Eksekusi ke-${job.runCount + 1}</i> &bull; 🆔 <code>${job.id}</code>`
+    `<b>Pemberitahuan Rutin:</b>\n\n` +
+    `${escapeHtml(job.message)}\n\n` +
+    `<i>Waktu eksekusi: ${timeStr}</i>`
   );
 }
 
@@ -572,25 +559,21 @@ export async function processReminderIntent(
     return {
       handled: true,
       replyText:
-        `🎉 <b>Jadwal Otomatis (Cron Job) Berhasil Dibuat!</b>\n\n` +
-        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
-        `⏰ <b>Jadwal:</b> ${parseResult.humanDescription || newJob.scheduleRaw}\n` +
-        `🔄 <b>Pola Cron:</b> <code>${newJob.cronExpression}</code>\n` +
-        `🎯 <b>Tujuan:</b> ${targetLabel}\n` +
-        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
-        `💡 <i>Ketik <code>/delremind ${newJob.id}</code> jika ingin membatalkan jadwal ini kapan saja.</i>`,
+        `<b>Jadwal Otomatis Berhasil Dibuat</b>\n\n` +
+        `Pesan: ${escapeHtml(newJob.message)}\n` +
+        `Jadwal: ${parseResult.humanDescription || newJob.scheduleRaw}\n` +
+        `Tujuan: ${targetLabel}\n\n` +
+        `Tugas ini akan dijalankan secara otomatis sesuai jadwal.`,
     };
   } else {
     return {
       handled: true,
       replyText:
-        `✅ <b>Pengingat (Reminder) Berhasil Diatur!</b>\n\n` +
-        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
-        `⏰ <b>Waktu:</b> ${parseResult.humanDescription || newJob.scheduleRaw}\n` +
-        `🎯 <b>Tujuan Notifikasi:</b> ${targetLabel}\n` +
-        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
-        `🔔 Notifikasi akan dikirimkan tepat pada waktunya!\n` +
-        `💡 <i>Ketik <code>/delremind ${newJob.id}</code> jika ingin membatalkan pengingat ini.</i>`,
+        `<b>Pengingat Berhasil Diatur</b>\n\n` +
+        `Pesan: ${escapeHtml(newJob.message)}\n` +
+        `Waktu: ${parseResult.humanDescription || newJob.scheduleRaw}\n` +
+        `Tujuan: ${targetLabel}\n\n` +
+        `Notifikasi akan dikirimkan tepat pada waktunya.`,
     };
   }
 }

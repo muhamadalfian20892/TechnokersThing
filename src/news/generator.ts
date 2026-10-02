@@ -1,6 +1,7 @@
 import { RawNewsItem } from './types';
 import { getActiveModel, getStyleMemory } from './memory';
 import { runUnifiedAiCompletion } from './ai_client';
+import { stripEmojis } from '../utils/text';
 
 export function getWibInfo(): {
   dateStr: string;
@@ -43,7 +44,7 @@ export async function generateDailyNewsDigest(
   const isWeeklyRecap = isFriday || forceRecap;
 
   if (newsItems.length === 0) {
-    return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada terobosan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi di edisi sebelumnya. Tetap pantau @aicomindo untuk update selanjutnya!\n\nLink Channel: <a href="https://t.me/aicomindo">t.me/aicomindo</a>\n#AIUpdate #aicomindo`;
+    return `<b>UPDATE AI | @aicomindo</b>\n<i>${formattedDate}</i>\n\nBelum ada terobosan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi di edisi sebelumnya. Tetap pantau @aicomindo untuk update selanjutnya!\n\nLink Channel: <a href="https://t.me/aicomindo">t.me/aicomindo</a>\n#AIUpdate #aicomindo`;
   }
 
   const targetCount = isWeeklyRecap ? Math.min(10, Math.max(5, newsItems.length)) : Math.min(5, newsItems.length);
@@ -86,6 +87,8 @@ PANDUAN UTAMA PANJANG & KUALITAS BERITA:
    - Tautan sumber di akhir paragraf dalam format ramah pembaca layar (WCAG 2.1 AAA): (Sumber: <a href="LINK">Baca liputan di NamaSumber</a>)
 
 STANDAR AKSESIBILITAS TELEGRAM (WCAG 2.1 AAA Text Standard):
+- DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun). Ini mutlak demi mematuhi standar aksesibilitas WCAG 2.1 AAA agar pembaca layar (screen reader) pengguna membaca teks dengan lancar.
+- Gunakan teks bersih dan berbobot tanpa simbol dekoratif.
 - Gunakan hierarki semantik yang jelas: Judul tebal <b>...</b>, pemisah paragraf ganda (\n\n) agar nyaman dibaca oleh pengguna maupun screen reader.
 - Jangan gunakan simbol atau singkatan yang ambigu.
 - Gunakan teks tautan yang deskriptif (misal: "Baca selengkapnya di TechCrunch", BUKAN "klik di sini").
@@ -93,12 +96,12 @@ STANDAR AKSESIBILITAS TELEGRAM (WCAG 2.1 AAA Text Standard):
 
 BERIKUT ADALAH MEMORI CONTOH GAYA & KEDALAMAN PENULISAN:
 ---
-${styleTemplate}
+${stripEmojis(styleTemplate)}
 ---
 
-Gunakan URL asli yang disediakan. Tulis selengkap dan seberbobot mungkin.`;
+Gunakan URL asli yang disediakan. Tulis selengkap dan seberbobot mungkin tanpa emoji.`;
 
-  const userPrompt = `Berikut adalah ${selected.length} bahan berita AI:\n\n${newsSummaryList}\n\nTuliskan postingan ${editionType} lengkap, panjang, dan berbobot sekarang mengikuti contoh gaya di atas:`;
+  const userPrompt = `Berikut adalah ${selected.length} bahan berita AI:\n\n${newsSummaryList}\n\nTuliskan postingan ${editionType} lengkap, panjang, dan berbobot sekarang mengikuti contoh gaya di atas tanpa menggunakan emoji:`;
 
   try {
     const result = await runUnifiedAiCompletion(
@@ -111,19 +114,19 @@ Gunakan URL asli yang disediakan. Tulis selengkap dan seberbobot mungkin.`;
       3500
     );
 
-    return result.text;
+    return stripEmojis(result.text);
   } catch (err) {
     console.error('[AI Generator] Error generating digest:', err);
   }
 
-  // Fallback
+  // Fallback (Clean, without emojis)
   const headline = isWeeklyRecap
-    ? `🔥 <b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Gila Minggu Ini! 🛡️🤝💰</b>`
-    : `⚡ <b>AI DAILY UPDATE: Gebrakan Terpanas Hari Ini! 🚀💡</b>`;
+    ? `<b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Berpengaruh Minggu Ini</b>`
+    : `<b>AI DAILY UPDATE: Terobosan Kecerdasan Buatan Terkini</b>`;
 
   const intro = isWeeklyRecap
-    ? `Seminggu terakhir ini dunia tech bener-bener gak kasih kita napas. Buat kalian yang gak mau pusing ketinggalan info, ini rangkuman gebrakan paling gila yang bakal ngerubah masa depan ekosistem digital kita. Langsung sikat:`
-    : `Perkembangan AI hari ini geraknya kenceng banget! Buat kalian yang mau tetep relevan dan gak mau FOMO, ini update paling gila hari ini yang wajib kalian tahu. Langsung sikat:`;
+    ? `Seminggu terakhir ini dunia teknologi dipenuhi dinamika penting. Untuk Anda yang tidak ingin tertinggal informasi, berikut adalah rangkuman terobosan yang mengubah ekosistem digital kita:`
+    : `Perkembangan kecerdasan buatan bergerak dengan cepat. Berikut adalah rangkuman perkembangan terbaru hari ini yang patut Anda simak:`;
 
   return [
     headline,
@@ -132,11 +135,11 @@ Gunakan URL asli yang disediakan. Tulis selengkap dan seberbobot mungkin.`;
     ``,
     ...selected.map(
       (item, idx) =>
-        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} Langkah strategis ini memperlihatkan akselerasi raksasa teknologi untuk mengamankan dominasi di pasar AI global. (Sumber: <a href="${item.url}">Baca artikel lengkap di ${escapeHtml(item.source)}</a>)\n`
+        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} Langkah strategis ini memperlihatkan akselerasi teknologi untuk mengamankan keunggulan di pasar AI global. (Sumber: <a href="${item.url}">Baca artikel lengkap di ${escapeHtml(item.source)}</a>)\n`
     ),
-    `<b>Pandangan Saya:</b>\nKita bener-bener lagi transisi dari AI yang cuma "pinter jawab" jadi AI yang "pinter kerja" (Agentic). Dari chip sampe software, semuanya lagi berevolusi gila-gilaan.`,
+    `<b>Analisis:</b>\nIndustri saat ini beralih dari model AI yang hanya menjawab menjadi sistem otonom yang mampu mengeksekusi alur kerja rumit secara terpadu.`,
     ``,
-    `Nah, dari berita di atas, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih opini kalian di bawah! 🚀🧪`,
+    `Bagikan pandangan Anda mengenai perkembangan berita di atas.`,
     ``,
     `Link Channel: <a href="https://t.me/aicomindo">t.me/aicomindo</a>`,
     `#TechRecap #AIUpdate #Google #Meta #OpenAI #aicomindo`,

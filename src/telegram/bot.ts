@@ -46,6 +46,7 @@ import {
 import { parseScheduleInput } from '../scheduler/parser';
 import { ScheduledJob } from '../scheduler/types';
 import { ChatMessage } from '../news/types';
+import { stripEmojis, escapeHtml } from '../utils/text';
 
 export interface TelegramUpdate {
   update_id: number;
@@ -159,9 +160,9 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `Halo, Administrator <b>${userName}</b>! 👑 (@alfian04121)\n\n` +
+        `Halo, Administrator <b>${userName}</b>! (@alfian04121)\n\n` +
           `Selamat datang di konsol kendali <b>Technokers AI Bot Pro</b>.\n\n` +
-          `🔑 <b>Perintah Khusus Admin:</b>\n` +
+          `<b>Perintah Khusus Admin:</b>\n` +
           `• <code>/dashboard_code</code> - Buat kode OTP masuk Web Dashboard (Valid 5 Menit)\n` +
           `• <code>/connectors</code> - Kelola integrasi Blogger, Gmail, & Webhook\n` +
           `• <code>/models</code> - Daftar model Cloudflare & Backup OpenAI API\n` +
@@ -178,14 +179,14 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `Halo, <b>${userName}</b>! 👋\n\n` +
-          `Selamat datang di <b>Technokers AI Bot</b>! 🤖\n` +
+        `Halo, <b>${userName}</b>!\n\n` +
+          `Selamat datang di <b>Technokers AI Bot</b>.\n` +
           `Asisten cerdas resmi dari komunitas <a href="https://t.me/aicomindo">@aicomindo (AI Community News Indonesia)</a>.\n\n` +
-          `✨ <b>Layanan yang Tersedia:</b>\n` +
+          `<b>Layanan yang Tersedia:</b>\n` +
           `• <b>Tanya AI:</b> Tanyakan konsep kecerdasan buatan, coding, atau model LLM (Kuota: ${limitText}). Bot mengingat alur percakapan Anda secara terisolasi.\n` +
           `• <b>/news:</b> Baca ringkasan berita AI terhangat kapan saja secara instan.\n` +
           `• <b>/reset:</b> Hapus memori percakapan untuk memulai topik baru.\n\n` +
-          `📢 Dapatkan rangkuman harian setiap jam 18:00 WIB di <a href="https://t.me/aicomindo">Channel Telegram @aicomindo</a>!`
+          `Dapatkan rangkuman harian setiap jam 18:00 WIB di <a href="https://t.me/aicomindo">Channel Telegram @aicomindo</a>!`
       );
     }
     return;
@@ -199,19 +200,19 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `📖 <b>Panduan Lengkap Administrator:</b>\n\n` +
-          `🔑 <b>Otentikasi & Web Dashboard:</b>\n` +
+        `<b>Panduan Lengkap Administrator:</b>\n\n` +
+          `<b>Otentikasi & Web Dashboard:</b>\n` +
           `• <code>/dashboard_code</code> - Buat kode OTP masuk dashboard (Valid 5 menit, 1x pakai)\n` +
           `• <code>/connectors</code> - Cek status konektor (Google Blogger, Gmail, Webhooks)\n\n` +
-          `🧠 <b>Model & Kuota:</b>\n` +
+          `<b>Model & Kuota:</b>\n` +
           `• <code>/models</code> - Daftar model Cloudflare & Backup Provider\n` +
           `• <code>/setmodel &lt;id&gt;</code> - Ganti model AI aktif\n` +
           `• <code>/usage</code> - Pantau pemakaian Neurons & kuota harian\n` +
           `• <code>/health</code> - Uji latensi Cloudflare & AI\n\n` +
-          `🛡️ <b>Manajemen Limit User:</b>\n` +
+          `<b>Manajemen Limit User:</b>\n` +
           `• <code>/setlimit &lt;n&gt;</code> - Atur batas chat harian (Contoh: /setlimit 40, /setlimit 0)\n` +
           `• <code>/getlimit</code> - Periksa pengaturan limit aktif\n\n` +
-          `📢 <b>Kontrol Channel @aicomindo:</b>\n` +
+          `<b>Kontrol Channel @aicomindo:</b>\n` +
           `• <code>/preview</code> - Pratinjau draf berita hari ini\n` +
           `• <code>/post_now</code> - Kirim langsung postingan ke channel\n` +
           `• <code>/stop_posting</code> - Hentikan posting otomatis jam 18:00 WIB\n` +
@@ -225,11 +226,11 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `📖 <b>Panduan Penggunaan Bot:</b>\n\n` +
+        `<b>Panduan Penggunaan Bot:</b>\n\n` +
           `• <b>Chat Interaktif:</b> Kirimkan pertanyaan apa saja seputar AI, pemrograman, atau teknologi. Asisten memiliki memori khusus percakapan Anda.\n` +
           `• <b>/news:</b> Dapatkan rangkuman kurasi berita AI terbaru hari ini.\n` +
           `• <b>/reset:</b> Hapus riwayat percakapan sesi Anda untuk memulai topik baru.\n\n` +
-          `📢 Gabung channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
+          `Gabung channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
       );
     }
     return;
@@ -290,19 +291,19 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `⏰ <b>Format Perintah /remind:</b>\n\n` +
+        `<b>Format Perintah /remind:</b>\n\n` +
           `• <code>/remind 10m Minum kopi</code> (10 menit lagi)\n` +
           `• <code>/remind 1h Cek server</code> (1 jam lagi)\n` +
           `• <code>/remind 14:30 Meeting tim</code> (Jam 14:30 WIB)\n` +
           `• <code>/remind besok 08:00 Berangkat kerja</code>\n\n` +
-          `💡 <i>Atau Anda bisa langsung ngobrol santai: "ingetin aku 15 menit lagi angkat jemuran".</i>`
+          `<i>Atau Anda bisa langsung mengobrol santai: "ingetin aku 15 menit lagi angkat jemuran".</i>`
       );
       return;
     }
 
     const parsed = parseScheduleInput(input, chatId);
     if (!parsed.success || !parsed.message) {
-      await sendTelegramMessage(token, chatId, `⚠️ ${parsed.error || 'Waktu atau pesan pengingat tidak valid.'}`);
+      await sendTelegramMessage(token, chatId, parsed.error || 'Waktu atau pesan pengingat tidak valid.');
       return;
     }
 
@@ -328,12 +329,12 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `✅ <b>Pengingat (Reminder) Berhasil Diatur!</b>\n\n` +
-        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
-        `⏰ <b>Waktu:</b> ${parsed.humanDescription || parsed.scheduleRaw}\n` +
-        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
-        `🔔 Saya akan mengirim notifikasi langsung ke chat ini tepat waktu.\n` +
-        `💡 <i>Ketik <code>/delremind ${newJob.id}</code> untuk membatalkan pengingat ini.</i>`
+      `<b>Pengingat (Reminder) Berhasil Diatur</b>\n\n` +
+        `Pesan: ${escapeHtml(newJob.message)}\n` +
+        `Waktu: ${parsed.humanDescription || parsed.scheduleRaw}\n` +
+        `ID Jadwal: <code>${newJob.id}</code>\n\n` +
+        `Notifikasi akan dikirimkan langsung ke chat ini tepat waktu.\n` +
+        `Ketik <code>/delremind ${newJob.id}</code> untuk membatalkan pengingat ini.`
     );
     return;
   }
@@ -344,7 +345,7 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `🔄 <b>Format Perintah /cron (Jadwal Berulang):</b>\n\n` +
+        `<b>Format Perintah /cron (Jadwal Berulang):</b>\n\n` +
           `• <code>/cron 0 9 * * * Minum air pagi</code> (Tiap jam 09:00 WIB)\n` +
           `• <code>/cron tiap hari jam 08:30 Standup meeting</code>\n` +
           `• <code>/cron tiap senin jam 10:00 Evaluasi mingguan</code>` +
@@ -362,7 +363,7 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `⚠️ Format jadwal berulang tidak dikenali. Contoh: <code>/cron 0 9 * * * Cek server</code> atau <code>/cron tiap hari jam 09:00 Cek email</code>.`
+        `Format jadwal berulang tidak dikenali. Contoh: <code>/cron 0 9 * * * Cek server</code> atau <code>/cron tiap hari jam 09:00 Cek email</code>.`
       );
       return;
     }
@@ -389,13 +390,13 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🎉 <b>Jadwal Otomatis (Cron Job) Aktif!</b>\n\n` +
-        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
-        `⏰ <b>Jadwal:</b> ${parsed.humanDescription || parsed.scheduleRaw}\n` +
-        `🔄 <b>Pola Cron:</b> <code>${newJob.cronExpression}</code>\n` +
-        `🎯 <b>Tujuan:</b> ${toChannel ? `Channel <b>${env.CHANNEL_ID}</b>` : 'Chat pribadi ini'}\n` +
-        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
-        `💡 <i>Ketik <code>/delremind ${newJob.id}</code> untuk membatalkan jadwal ini.</i>`
+      `<b>Jadwal Otomatis (Cron Job) Aktif</b>\n\n` +
+        `Pesan: ${escapeHtml(newJob.message)}\n` +
+        `Jadwal: ${parsed.humanDescription || parsed.scheduleRaw}\n` +
+        `Pola Cron: <code>${newJob.cronExpression}</code>\n` +
+        `Tujuan: ${toChannel ? `Channel <b>${env.CHANNEL_ID}</b>` : 'Chat pribadi ini'}\n` +
+        `ID Jadwal: <code>${newJob.id}</code>\n\n` +
+        `Ketik <code>/delremind ${newJob.id}</code> untuk membatalkan jadwal ini.`
     );
     return;
   }
@@ -408,25 +409,25 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `📭 <b>Tidak Ada Pengingat / Cron Aktif</b>\n\n` +
+        `<b>Tidak Ada Pengingat / Cron Aktif</b>\n\n` +
           `Anda belum memiliki pengingat aktif.\n` +
-          `Coba buat dengan: <code>/remind 10m Minum air</code> atau katakan <i>"ingetin aku 20 menit lagi cek tugas"</i>!`
+          `Coba buat dengan: <code>/remind 10m Minum air</code> atau katakan <i>"ingetin aku 20 menit lagi cek tugas"</i>.`
       );
       return;
     }
 
     const listStr = activeJobs
       .map((j) => {
-        const typeIcon = j.type === 'cron' ? '🔄 [CRON]' : '⏰ [REMINDER]';
+        const typeStr = j.type === 'cron' ? '[Jadwal Rutin]' : '[Pengingat]';
         const targetStr = String(j.targetChatId) === String(env.CHANNEL_ID) ? 'Channel @aicomindo' : 'Private';
-        return `• ${typeIcon} <b>${escapeHtml(j.message)}</b>\n  🕒 Waktu: <i>${j.scheduleRaw}</i>\n  🎯 Target: ${targetStr}\n  🆔 ID: <code>${j.id}</code> (Batal: <code>/delremind ${j.id}</code>)`;
+        return `• ${typeStr} <b>${escapeHtml(j.message)}</b>\n  Waktu: <i>${j.scheduleRaw}</i>\n  Target: ${targetStr}\n  ID: <code>${j.id}</code> (Batal: <code>/delremind ${j.id}</code>)`;
       })
       .join('\n\n');
 
     await sendTelegramMessage(
       token,
       chatId,
-      `📋 <b>Daftar Pengingat & Cron Aktif (${activeJobs.length} item):</b>\n\n${listStr}`
+      `<b>Daftar Pengingat & Cron Aktif (${activeJobs.length} item):</b>\n\n${listStr}`
     );
     return;
   }
@@ -434,7 +435,7 @@ export async function handleTelegramUpdate(
   if (text.startsWith('/delremind') || text.startsWith('/delcron')) {
     const idArg = text.replace(/^\/(?:delremind|delcron)/i, '').trim();
     if (!idArg) {
-      await sendTelegramMessage(token, chatId, `⚠️ Masukkan ID jadwal. Contoh: <code>/delremind job_12345</code>`);
+      await sendTelegramMessage(token, chatId, `Masukkan ID jadwal. Contoh: <code>/delremind job_12345</code>`);
       return;
     }
 
@@ -510,18 +511,18 @@ export async function handleTelegramUpdate(
 
     const formatList = (list: typeof models) =>
       list.slice(0, 8).map((m) => {
-        const isActive = m.id === activeModel ? ' 🟢 [AKTIF]' : '';
+        const isActive = m.id === activeModel ? ' [AKTIF]' : '';
         return `• <code>${m.id}</code>${isActive}\n  <i>${m.author} (${m.description || ''})</i>`;
       }).join('\n\n');
 
     await sendTelegramMessage(
       token,
       chatId,
-      `🌐 <b>Katalog Model AI (Cloudflare & Backup Provider)</b>\n\n` +
-        `Model Aktif Saat Ini:\n👉 <code>${activeModel}</code>\n\n` +
-        `☁️ <b>Cloudflare Workers AI:</b>\n${formatList(cfModels)}\n\n` +
-        `🔄 <b>Backup OpenAI Endpoint (api.mrido1.my.id):</b>\n${formatList(backupModels)}\n\n` +
-        `💡 <b>Cara Ganti Model:</b>\nKetik: <code>/setmodel ag/gemini-3.8-flash-high</code> atau <code>/setmodel @cf/meta/llama-3.3-70b-instruct-fp8-fast</code>`
+      `<b>Katalog Model AI (Cloudflare & Backup Provider)</b>\n\n` +
+        `Model Aktif Saat Ini:\n<code>${activeModel}</code>\n\n` +
+        `<b>Cloudflare Workers AI:</b>\n${formatList(cfModels)}\n\n` +
+        `<b>Backup OpenAI Endpoint (api.mrido1.my.id):</b>\n${formatList(backupModels)}\n\n` +
+        `<b>Cara Ganti Model:</b>\nKetik: <code>/setmodel ag/gemini-3.8-flash-high</code> atau <code>/setmodel @cf/meta/llama-3.3-70b-instruct-fp8-fast</code>`
     );
     return;
   }
@@ -532,7 +533,7 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `⚠️ Masukkan ID model. Contoh:\n<code>/setmodel ag/gemini-3.8-flash-high</code>\natau\n<code>/setmodel @cf/meta/llama-3.3-70b-instruct-fp8-fast</code>`
+        `Masukkan ID model. Contoh:\n<code>/setmodel ag/gemini-3.8-flash-high</code>\natau\n<code>/setmodel @cf/meta/llama-3.3-70b-instruct-fp8-fast</code>`
       );
       return;
     }
@@ -542,7 +543,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `✅ <b>Model AI Berhasil Diperbarui!</b>\n\nModel aktif: <code>${modelArg}</code>\nProvider: <b>${provider}</b>.`
+      `<b>Model AI Berhasil Diperbarui</b>\n\nModel aktif: <code>${modelArg}</code>\nProvider: <b>${provider}</b>.`
     );
     return;
   }
@@ -556,14 +557,14 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `📊 <b>Pemakaian & Kuota Sistem AI</b>\n📅 <i>Hari Ini (${stats.date})</i>\n\n` +
-        `☁️ <b>Cloudflare AI Calls:</b> ${stats.aiGenerations} kali\n` +
-        `🔄 <b>Backup AI Calls:</b> ${stats.backupAiRequests || 0} kali\n` +
-        `🌐 <b>Total HTTP Requests:</b> ${stats.totalRequests}\n` +
-        `🔤 <b>Total Token Diproses:</b> ${stats.totalTokensEstimated.toLocaleString('id-ID')} token\n` +
-        `🧠 <b>Estimasi Neurons Cloudflare:</b> ${stats.neuronsEstimated.toLocaleString('id-ID')} / ${freeTierDailyNeurons.toLocaleString('id-ID')} Neurons\n\n` +
+      `<b>Pemakaian & Kuota Sistem AI</b>\n<i>Hari Ini (${stats.date})</i>\n\n` +
+        `<b>Cloudflare AI Calls:</b> ${stats.aiGenerations} kali\n` +
+        `<b>Backup AI Calls:</b> ${stats.backupAiRequests || 0} kali\n` +
+        `<b>Total HTTP Requests:</b> ${stats.totalRequests}\n` +
+        `<b>Total Token Diproses:</b> ${stats.totalTokensEstimated.toLocaleString('id-ID')} token\n` +
+        `<b>Estimasi Neurons Cloudflare:</b> ${stats.neuronsEstimated.toLocaleString('id-ID')} / ${freeTierDailyNeurons.toLocaleString('id-ID')} Neurons\n\n` +
         `[${progressBar}] <b>${pct}%</b>\n\n` +
-        `💡 <i>Jika limit Cloudflare habis, sistem otomatis beralih ke Backup API!</i>`
+        `<i>Jika limit Cloudflare habis, sistem otomatis beralih ke Backup API.</i>`
     );
     return;
   }
@@ -576,10 +577,10 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🏓 <b>Pong! Status Kesehatan Sistem:</b>\n\n` +
-        `🟢 <b>Worker Core:</b> Online & Stabil\n` +
-        `💾 <b>Cloudflare KV Latency:</b> ${kvLatency} ms\n` +
-        `🔄 <b>Backup AI Endpoint:</b> Terhubung (${env.BACKUP_AI_URL})`
+      `<b>Status Kesehatan Sistem:</b>\n\n` +
+        `<b>Worker Core:</b> Online & Stabil\n` +
+        `<b>Cloudflare KV Latency:</b> ${kvLatency} ms\n` +
+        `<b>Backup AI Endpoint:</b> Terhubung (${env.BACKUP_AI_URL})`
     );
     return;
   }
@@ -589,7 +590,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🛑 <b>Posting Otomatis Diberhentikan (PAUSED)!</b>\n\nJadwal harian jam 18:00 WIB tidak akan mengirim apa pun ke ${env.CHANNEL_ID}.\nKetik /resume_posting untuk mengaktifkan kembali.`
+      `<b>Posting Otomatis Diberhentikan (PAUSED)</b>\n\nJadwal harian jam 18:00 WIB tidak akan mengirim apa pun ke ${env.CHANNEL_ID}.\nKetik /resume_posting untuk mengaktifkan kembali.`
     );
     return;
   }
@@ -599,7 +600,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🟢 <b>Posting Otomatis Diaktifkan Kembali (ACTIVE)!</b>\n\nBot akan kembali memposting setiap hari pukul <b>18:00 WIB</b> ke ${env.CHANNEL_ID}.`
+      `<b>Posting Otomatis Diaktifkan Kembali (ACTIVE)</b>\n\nBot akan kembali memposting setiap hari pukul <b>18:00 WIB</b> ke ${env.CHANNEL_ID}.`
     );
     return;
   }
@@ -609,7 +610,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `⏳ <i>Sedang menyusun berita panjang & memposting langsung ke channel ${env.CHANNEL_ID}...</i>`
+      `<i>Sedang menyusun berita panjang & memposting langsung ke channel ${env.CHANNEL_ID}...</i>`
     );
 
     const result = await executeDailyNewsPosting(env, true);
@@ -617,10 +618,10 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `✅ <b>Berhasil Terkirim ke Channel!</b>\n\n${result.message}\nJumlah item: ${result.postedCount} berita.`
+        `<b>Berhasil Terkirim ke Channel</b>\n\n${result.message}\nJumlah item: ${result.postedCount} berita.`
       );
     } else {
-      await sendTelegramMessage(token, chatId, `⚠️ <b>Gagal Posting:</b>\n${result.message}`);
+      await sendTelegramMessage(token, chatId, `<b>Gagal Posting:</b>\n${result.message}`);
     }
     return;
   }
@@ -630,7 +631,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🔍 <i>Sedang menyusun draf berita AI berbobot sesuai format hari ini...</i>`
+      `<i>Sedang menyusun draf berita AI berbobot sesuai format hari ini...</i>`
     );
 
     try {
@@ -643,7 +644,7 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(token, chatId, digest);
     } catch (err) {
       console.error('Error generating preview:', err);
-      await sendTelegramMessage(token, chatId, `⚠️ Gagal menghasilkan preview: ${String(err)}`);
+      await sendTelegramMessage(token, chatId, `Gagal menghasilkan preview: ${String(err)}`);
     }
     return;
   }
@@ -653,7 +654,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🔓 <b>Kunci Harian Dibuka!</b>\n\nKunci untuk tanggal ${dateStr} telah direset.`
+      `<b>Kunci Harian Dibuka</b>\n\nKunci untuk tanggal ${dateStr} telah direset.`
     );
     return;
   }
@@ -661,13 +662,13 @@ export async function handleTelegramUpdate(
   if (text.startsWith('/search')) {
     const query = text.replace('/search', '').trim();
     if (!query) {
-      await sendTelegramMessage(token, chatId, `⚠️ Masukkan kata kunci pencarian. Contoh: <code>/search Google</code>`);
+      await sendTelegramMessage(token, chatId, `Masukkan kata kunci pencarian. Contoh: <code>/search Google</code>`);
       return;
     }
 
     const results = await searchPostedNews(env.AI_NEWS_KV, query);
     if (results.length === 0) {
-      await sendTelegramMessage(token, chatId, `🔍 Tidak ditemukan berita dengan kata kunci "<b>${query}</b>" di arsip KV.`);
+      await sendTelegramMessage(token, chatId, `Tidak ditemukan berita dengan kata kunci "<b>${query}</b>" di arsip KV.`);
       return;
     }
 
@@ -675,7 +676,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🔍 <b>Hasil Pencarian Arsip ("${query}"):</b>\n\n${lines.join('\n\n')}`
+      `<b>Hasil Pencarian Arsip ("${query}"):</b>\n\n${lines.join('\n\n')}`
     );
     return;
   }
@@ -687,7 +688,7 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `⚠️ Format: <code>/addnews Judul Berita | https://link-sumber.com | Detail singkat</code>`
+        `Format: <code>/addnews Judul Berita | https://link-sumber.com | Detail singkat</code>`
       );
       return;
     }
@@ -704,7 +705,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `✅ <b>Berita Manual Tersimpan!</b>\n\nBerita ini akan diprioritaskan masuk ke postingan digest berikutnya.`
+      `<b>Berita Manual Tersimpan</b>\n\nBerita ini akan diprioritaskan masuk ke postingan digest berikutnya.`
     );
     return;
   }
@@ -717,7 +718,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `📜 <b>Log Audit Aktivitas Sistem:</b>\n\n${logLines.join('\n\n') || 'Belum ada log'}`
+      `<b>Log Audit Aktivitas Sistem:</b>\n\n${logLines.join('\n\n') || 'Belum ada log'}`
     );
     return;
   }
@@ -731,22 +732,22 @@ export async function handleTelegramUpdate(
       getDailyChatLimit(env.AI_NEWS_KV),
     ]);
 
-    const postStatus = paused ? '🛑 PAUSED' : '🟢 ACTIVE';
+    const postStatus = paused ? 'PAUSED' : 'ACTIVE';
     const limitDesc = currentLimit === 0 ? 'Disabled (Unlimited)' : `${currentLimit} chat/hari`;
 
     await sendTelegramMessage(
       token,
       chatId,
-      `📊 <b>Status Sistem Technokers AI Bot Pro</b>\n\n` +
-        `⚙️ <b>Status Scheduler:</b> ${postStatus}\n` +
-        `🧠 <b>Model Aktif:</b> <code>${activeModel}</code>\n` +
-        `📅 <b>Waktu Saat Ini:</b> ${formattedDate}\n` +
-        `📑 <b>Format Edisi:</b> ${isFriday ? 'Weekly Tech Recap (10 Berita)' : 'Daily AI Update (5 Berita)'}\n` +
-        `🛡️ <b>User Daily Limit:</b> ${limitDesc}\n` +
-        `📢 <b>Channel Target:</b> ${env.CHANNEL_ID}\n` +
-        `⏰ <b>Jadwal:</b> 1x Sehari (18:00 WIB)\n` +
-        `💾 <b>Arsip KV:</b> ${history.length} item tersimpan\n` +
-        `🕒 <b>Post Terakhir:</b> ${lastStats ? `${new Date(lastStats.timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB` : '-'}`
+      `<b>Status Sistem Technokers AI Bot Pro</b>\n\n` +
+        `• Status Scheduler: ${postStatus}\n` +
+        `• Model Aktif: <code>${activeModel}</code>\n` +
+        `• Waktu Saat Ini: ${formattedDate}\n` +
+        `• Format Edisi: ${isFriday ? 'Weekly Tech Recap (10 Berita)' : 'Daily AI Update (5 Berita)'}\n` +
+        `• Batas Chat User: ${limitDesc}\n` +
+        `• Channel Target: ${env.CHANNEL_ID}\n` +
+        `• Jadwal: 1x Sehari (18:00 WIB)\n` +
+        `• Arsip KV: ${history.length} item tersimpan\n` +
+        `• Post Terakhir: ${lastStats ? `${new Date(lastStats.timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB` : '-'}`
     );
     return;
   }
@@ -785,11 +786,13 @@ KONTEKS PENGGUNA TERISOLASI:
 - Jika pengguna meminta pengingat atau menyebut kegiatan yang akan datang, kamu dapat memutuskan secara mandiri apakah harus memanggil tool 'set_reminder' atau bertanya secara ramah apakah mereka mau diingatkan!
 
 STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
-1. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan mudah dipahami.
-2. Gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
-3. Buat teks memiliki hierarki visual yang kontras, terstruktur rapi, dan nyaman dibaca oleh pengguna maupun screen reader.
-4. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
-5. Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
+1. DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun) demi kenyamanan pengguna dengan pembaca layar (screen reader).
+2. JANGAN PERNAH menyebutkan kode hash, job ID, atau nomor teknis internal apa pun saat merespons atau mengonfirmasi pengingat/jadwal kepada pengguna dalam obrolan biasa! Bicaralah secara santai, mengalir, dan ramah seperti teman (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").
+3. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan mudah dipahami.
+4. Gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
+5. Buat teks memiliki hierarki visual yang kontras, terstruktur rapi, dan nyaman dibaca oleh pengguna maupun screen reader.
+6. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
+7. Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
 
     const agentResult = await runConversationalAgent(
       env,
@@ -823,13 +826,8 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
     await sendTelegramMessage(
       token,
       chatId,
-      '⚠️ Maaf, layanan AI sedang sibuk atau mengalami kendala jaringan. Silakan coba beberapa saat lagi.',
+      'Maaf, layanan AI sedang sibuk atau mengalami kendala jaringan. Silakan coba beberapa saat lagi.',
       { replyToMessageId: msg.message_id }
     );
   }
-}
-
-function escapeHtml(text: string): string {
-  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-  return text.replace(/[&<>"']/g, (m) => map[m]);
 }
