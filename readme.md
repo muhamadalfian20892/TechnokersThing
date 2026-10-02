@@ -1,69 +1,62 @@
 # TechnokersThing - Telegram AI News Bot & Interactive Chat Pro
 
-Bot Telegram otomatis dan asisten AI bertenaga **Cloudflare Workers** & **Workers AI (Llama 3.3 70B, DeepSeek R1, Qwen 2.5)** yang terhubung langsung ke channel Telegram **[@aicomindo](https://t.me/aicomindo)**.
+Bot Telegram otomatis dan asisten AI bertenaga **Cloudflare Workers** & **Workers AI** dengan **Backup OpenAI-Compatible Provider** yang terhubung langsung ke channel Telegram **[@aicomindo](https://t.me/aicomindo)**.
 
 ---
 
-## 🌟 20 Fitur & Stabilitas Utama
+## 👑 Sistem Hak Akses Administrator
 
-1. **Jadwal Posting Harian (18:00 WIB)**: Tepat 1x sehari pukul 18:00 WIB (11:00 UTC) via Cloudflare Cron Trigger `0 11 * * *`.
-2. **Kunci Anti-Spam Harian (`daily_posted:YYYY-MM-DD`)**: Mencegah spam atau eksekusi ganda di hari yang sama.
-3. **Edisi Khusus Hari Jumat (Weekly Tech Recap)**: Rangkuman 10 gebrakan paling gila selama seminggu penuh dengan narasi panjang, berbobot, dan analitis.
-4. **Edisi Harian (Daily AI Update)**: Rangkuman 5 terobosan terpanas hari ini (Senin-Kamis, Sabtu, Minggu).
-5. **Few-Shot Style Memory System**: Template memori penulisan disimpan di KV dan diinjeksikan langsung ke prompt AI untuk memastikan tulisan selalu panjang, berisi fakta angka, dan bernada tech insider.
-6. **Live Cloudflare Models Catalog (`/models`)**: Mengambil katalog model resmi secara live dari dokumentasi Cloudflare Workers AI.
-7. **Dynamic Model Switcher (`/setmodel <id>`)**: Mengganti model AI aktif secara instan tanpa perlu deploy ulang.
-8. **Usage & Quota Limit Monitor (`/usage`)**: Melacak pemakaian requests, token, dan estimasi kuota Neurons Cloudflare Free Tier (10.000 Neurons/hari).
-9. **Dynamic Model Cascade Fallback**: Jika model utama timeout/gagal, otomatis beralih ke cadangan (Llama 3.3 70B -> DeepSeek R1 32B -> Llama 3.1 8B -> Qwen 2.5 7B).
-10. **Conversational Multi-Turn Memory**: Percakapan di chat pribadi bot mengingat konteks tanya jawab sebelumnya (disimpan di KV).
-11. **Admin Emergency Kill-Switch (`/stop_posting` & `/resume_posting`)**: Menghentikan atau mengaktifkan kembali jadwal posting seketika.
-12. **Force Post On-Demand (`/post_now`)**: Memaksa posting sekarang ke channel tanpa menunggu jam 18:00 WIB.
-13. **Draft Preview (`/preview`)**: Melihat pratinjau berita AI hari ini di chat pribadi sebelum tayang.
-14. **Arsip Berita & Pencarian (`/search <query>`)**: Mencari riwayat berita yang pernah diposting di memori KV.
-15. **Suntik Berita Manual (`/addnews`)**: Admin dapat memasukkan breaking news manual ke dalam antrean digest berikutnya.
-16. **Anti-Flood Rate Limiting**: Proteksi chat pribadi bot maksimal 20 request per menit per user untuk mencegah abuse.
-17. **Smart Message Chunking**: Memecah pesan panjang secara rapi per paragraf agar tidak melebihi limit 4096 karakter Telegram.
-18. **Sistem Otorisasi Admin (`/setadmin` & `/admins`)**: Melindungi perintah sensitif agar hanya bisa diakses admin.
-19. **Log Audit Aktivitas (`/logs`)**: Mencatat riwayat aksi sistem dan admin di KV.
-20. **Health Check & Latency Monitor (`/health` & `/ping`)**: Mengukur latensi respon Cloudflare KV dan Workers AI.
+- **Super Admin**: `@alfian04121` (ID: `1023972475`, Muhamad Alfian)
+- **User Non-Admin**:
+  - Hanya dapat menggunakan **chat tanya-jawab AI** dan perintah **`/news`**.
+  - Kuota chat dibatasi maksimal **40 chat per hari** (dapat diubah oleh Admin via `/setlimit <n>`, `0` untuk menonaktifkan limit).
+  - Admin bebas kuota (*unlimited*).
+
+---
+
+## 🔐 Keamanan Web Dashboard (5-Menit One-Time Code)
+
+Web dashboard di `https://technokersthing.hafiyanajah.workers.dev` diproteksi sistem otentikasi kode sekali pakai:
+1. Admin membuka chat bot Telegram [@tckn_bot](https://t.me/tckn_bot) dan mengetik **`/dashboard_code`**.
+2. Bot menghasilkan kode OTP 6-digit yang **valid selama 5 menit**.
+3. Kode bersifat **sekali pakai** (*single-use*); langsung hangus setelah berhasil login.
+4. **Anti-Brute Force**: Maksimal 3 kali percobaan gagal per IP sebelum akun login dikunci selama 15 menit.
+5. Setelah login, sesi aman berlaku selama 24 jam dengan cookie HTTP-Only.
+
+---
+
+## 🔄 Dual AI Provider & Automatic Failover
+
+Bot mendukung dua provider AI sekaligus:
+1. **Cloudflare Workers AI**: Model native seperti `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, dll.
+2. **Backup OpenAI-Compatible Provider**:
+   - Endpoint: `https://api.mrido1.my.id/v1`
+   - Model: `ag/gemini-3.8-flash-high`, `ag/claude-sonnet-4-6`, `xai/grok-4.6`, `nvidia/deepseek-ai/deepseek-v4-pro`, dll.
+3. **Automatic Failover**: Jika kuota harian Cloudflare AI habis (Error 429 / limit tercapai), sistem otomatis beralih ke provider backup tanpa mengganggu postingan harian atau percakapan user!
 
 ---
 
 ## 📱 Daftar Perintah Telegram Bot (@tckn_bot)
 
-| Perintah | Akses | Deskripsi |
-|----------|-------|-----------|
-| `/start` | Semua | Membuka pesan perkenalan & panduan |
-| `/help` | Semua | Daftar lengkap bantuan & perintah |
-| `/news` | Semua | Mengambil ringkasan berita AI terkini secara on-demand |
-| `/preview` | Semua | Melihat draf berita AI yang siap diposting hari ini |
-| `/status` | Semua | Melihat status sistem, model aktif, dan memori KV |
-| `/models` | Semua | Menampilkan daftar model AI resmi Cloudflare |
-| `/usage` | Semua | Memeriksa estimasi pemakaian kuota Neurons hari ini |
-| `/health` | Semua | Uji latensi roundtrip Cloudflare KV dan Workers AI |
-| `/search <kata>` | Semua | Mencari arsip berita yang pernah diposting |
-| `/stop_posting` | Admin | 🛑 Menghentikan posting otomatis harian (Pause) |
-| `/resume_posting` | Admin | 🟢 Mengaktifkan kembali posting otomatis harian |
-| `/post_now` | Admin | 🚀 Memaksa pengiriman postingan langsung ke channel |
-| `/setmodel <id>` | Admin | Mengganti model AI aktif |
-| `/unlock_today` | Admin | Membuka kunci harian untuk testing |
-| `/addnews <j> \| <l> \| <i>` | Admin | Menambahkan berita breaking news manual |
-| `/getstyle` | Admin | Melihat template gaya few-shot yang tersimpan |
-| `/resetstyle` | Admin | Mengembalikan template gaya ke default |
-| `/logs` | Admin | Melihat 10 log aktivitas sistem terakhir |
-| `/backup` | Admin | Mengekspor metadata riwayat KV |
-| `/admins` | Admin | Menampilkan daftar ID admin terdaftar |
+### Pengguna Umum
+- `/start` : Sambutan & penjelasan bot.
+- `/help` : Panduan penggunaan.
+- `/news` : Rangkuman berita AI terkini on-demand.
+- Chat bebas seputar AI (kuota default: 40 pesan/hari).
 
----
-
-## 🌐 Endpoint REST API Worker
-
-- `GET /` - Dashboard status antarmuka web
-- `GET /telegram/status` - Status bot, webhook, dan memori KV
-- `GET /api/models` - Katalog model resmi Cloudflare
-- `GET /api/usage` - Monitor pemakaian kuota Neurons
-- `GET /api/health` - Health check & latensi
-- `GET /api/preview-news` - Dry-run digest hari ini
-- `GET /api/pause` - Pause posting via HTTP
-- `GET /api/resume` - Resume posting via HTTP
-- `POST /api/trigger-news` - Trigger manual posting ke channel
+### Khusus Admin (@alfian04121)
+- `/dashboard_code` : Buat kode OTP masuk Web Dashboard (valid 5 menit).
+- `/models` : Lihat daftar model Cloudflare & Backup Provider.
+- `/setmodel <id>` : Ganti model AI aktif secara dinamis.
+- `/setlimit <n>` : Ubah kuota chat harian user non-admin (`0` = disable limit).
+- `/getlimit` : Cek pengaturan limit chat yang sedang aktif.
+- `/preview` : Melihat draf berita AI yang siap diposting hari ini.
+- `/post_now` : Paksa kirim digest berita langsung ke channel `@aicomindo`.
+- `/stop_posting` : 🛑 Hentikan posting harian otomatis (Pause).
+- `/resume_posting` : 🟢 Aktifkan kembali posting harian otomatis.
+- `/usage` : Monitor pemakaian token, Neurons, dan request harian.
+- `/unlock_today` : Buka kunci harian jika ingin re-test posting.
+- `/addnews <j> | <l> | <i>` : Suntikkan berita breaking news manual.
+- `/search <kata>` : Cari arsip berita yang pernah diposting di KV.
+- `/health` / `/ping` : Cek latensi roundtrip Cloudflare KV & Workers AI.
+- `/logs` : Lihat log aktivitas audit sistem.

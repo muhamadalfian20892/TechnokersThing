@@ -1,66 +1,91 @@
 import { CloudflareModelItem } from './types';
 
-// Curated verified base text models in Cloudflare Workers AI
-export const DEFAULT_TEXT_MODELS: CloudflareModelItem[] = [
+// Curated base models
+export const DEFAULT_MODELS: CloudflareModelItem[] = [
   {
     id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    name: 'Llama 3.3 70B Instruct (FP8 Fast)',
+    name: 'Llama 3.3 70B Instruct',
     author: 'Meta',
     task: 'Text Generation',
-    description: 'Flagship open-weights model, super high reasoning and creative writing capability.',
-  },
-  {
-    id: '@cf/meta/llama-3.1-8b-instruct',
-    name: 'Llama 3.1 8B Instruct',
-    author: 'Meta',
-    task: 'Text Generation',
-    description: 'Fast, lightweight, efficient general purpose LLM.',
+    provider: 'cloudflare',
+    description: 'Flagship Cloudflare AI model, high reasoning & writing capability.',
   },
   {
     id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
     name: 'DeepSeek R1 Distill Qwen 32B',
     author: 'DeepSeek',
     task: 'Text Generation',
-    description: 'High-level reasoning and problem-solving model distilled from DeepSeek R1.',
+    provider: 'cloudflare',
+    description: 'Reasoning model distilled from DeepSeek R1.',
   },
   {
-    id: '@cf/qwen/qwen2.5-7b-instruct',
-    name: 'Qwen 2.5 7B Instruct',
-    author: 'Alibaba Qwen',
+    id: 'ag/gemini-3.8-flash-high',
+    name: 'Gemini 3.8 Flash High',
+    author: 'Google (Backup Provider)',
     task: 'Text Generation',
-    description: 'Strong multilingual and coding performance.',
+    provider: 'backup',
+    description: 'Fast, high quality reasoning model on backup OpenAI provider.',
   },
   {
-    id: '@cf/google/gemma-2-9b-it',
-    name: 'Gemma 2 9B IT',
-    author: 'Google',
+    id: 'ag/claude-sonnet-4-6',
+    name: 'Claude Sonnet 4.6',
+    author: 'Anthropic (Backup Provider)',
     task: 'Text Generation',
-    description: 'Google state of the art lightweight open model.',
+    provider: 'backup',
+    description: 'Premium reasoning and nuanced writing on backup provider.',
   },
   {
-    id: '@cf/mistral/mistral-7b-instruct-v0.2',
-    name: 'Mistral 7B Instruct v0.2',
-    author: 'Mistral AI',
+    id: 'xai/grok-4.6',
+    name: 'Grok 4.6',
+    author: 'xAI (Backup Provider)',
     task: 'Text Generation',
-    description: 'High efficiency reasoning and concise summarization.',
+    provider: 'backup',
+    description: 'High performance frontier model on backup provider.',
+  },
+  {
+    id: 'nvidia/deepseek-ai/deepseek-v4-pro',
+    name: 'DeepSeek v4 Pro',
+    author: 'DeepSeek / NVIDIA (Backup Provider)',
+    task: 'Text Generation',
+    provider: 'backup',
+    description: 'Ultra fast large context model on backup provider.',
   },
 ];
 
-// Fetch live models from Cloudflare official documentation catalog
-export async function fetchLiveCloudflareModels(kv?: KVNamespace): Promise<CloudflareModelItem[]> {
-  const cacheKey = 'cache:cloudflare_models_catalog';
+// Fetch models from Backup OpenAI compatible endpoint
+async function fetchBackupModels(url: string, apiKey: string): Promise<CloudflareModelItem[]> {
+  try {
+    const endpoint = `${url.replace(/\/+$/, '')}/models`;
+    const res = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!res.ok) return [];
 
-  if (kv) {
-    const cached = await kv.get(cacheKey);
-    if (cached) {
-      try {
-        return JSON.parse(cached);
-      } catch {
-        // continue fetch
-      }
-    }
+    const data = (await res.json()) as {
+      data?: Array<{ id: string; owned_by?: string; context_length?: number }>;
+    };
+
+    if (!data.data) return [];
+
+    // Filter relevant chat / text generation models
+    return data.data
+      .filter((m) => !m.id.includes('asr') && !m.id.includes('whisper'))
+      .map((m) => ({
+        id: m.id,
+        name: m.id.split('/').pop() || m.id,
+        author: m.owned_by ? `${m.owned_by.toUpperCase()} (Backup API)` : 'Backup API',
+        task: 'Text Generation',
+        provider: 'backup' as const,
+        description: `Context: ${m.context_length ? `${(m.context_length / 1000).toFixed(0)}k` : 'Large'}`,
+      }));
+  } catch (err) {
+    console.warn('Error fetching backup models:', err);
+    return [];
   }
+}
 
+// Fetch live Cloudflare models catalog
+async function fetchCloudflareDocsModels(): Promise<CloudflareModelItem[]> {
   try {
     const res = await fetch('https://developers.cloudflare.com/workers-ai/models/', {
       headers: {
@@ -69,68 +94,86 @@ export async function fetchLiveCloudflareModels(kv?: KVNamespace): Promise<Cloud
       },
     });
 
-    if (res.ok) {
-      const text = await res.text();
-      const extracted: CloudflareModelItem[] = [];
+    if (!res.ok) return [];
+    const text = await res.text();
+    const extracted: CloudflareModelItem[] = [];
 
-      // Extract model blocks from markdown
-      // Pattern typically: <h3>model-name</h3>\n\nAuthorTask...
-      const regex = /<h3>(.*?)<\/h3>\s*([\s\S]*?)(?=<h3>|$)/gi;
-      let match: RegExpExecArray | null;
+    const regex = /<h3>(.*?)<\/h3>\s*([\s\S]*?)(?=<h3>|$)/gi;
+    let match: RegExpExecArray | null;
 
-      while ((match = regex.exec(text)) !== null) {
-        const rawName = match[1].trim();
-        const body = match[2].trim();
+    while ((match = regex.exec(text)) !== null) {
+      const rawName = match[1].trim();
+      const body = match[2].trim();
 
-        // Check if related to text generation or language model
-        const isTextGen =
-          body.toLowerCase().includes('text generation') ||
-          rawName.includes('llama') ||
-          rawName.includes('deepseek') ||
-          rawName.includes('qwen') ||
-          rawName.includes('gemma') ||
-          rawName.includes('mistral');
+      const isTextGen =
+        body.toLowerCase().includes('text generation') ||
+        rawName.includes('llama') ||
+        rawName.includes('deepseek') ||
+        rawName.includes('qwen') ||
+        rawName.includes('gemma') ||
+        rawName.includes('mistral');
 
-        if (isTextGen) {
-          // Construct canonical @cf/ id
-          let modelId = `@cf/${rawName}`;
-          if (rawName.includes('llama')) {
-            modelId = `@cf/meta/${rawName}`;
-          } else if (rawName.includes('deepseek')) {
-            modelId = `@cf/deepseek-ai/${rawName}`;
-          } else if (rawName.includes('qwen')) {
-            modelId = `@cf/qwen/${rawName}`;
-          }
+      if (isTextGen) {
+        let modelId = `@cf/${rawName}`;
+        if (rawName.includes('llama')) modelId = `@cf/meta/${rawName}`;
+        else if (rawName.includes('deepseek')) modelId = `@cf/deepseek-ai/${rawName}`;
+        else if (rawName.includes('qwen')) modelId = `@cf/qwen/${rawName}`;
 
-          extracted.push({
-            id: modelId,
-            name: rawName,
-            author: body.split('Text Generation')[0]?.trim() || 'Cloudflare AI',
-            task: 'Text Generation',
-            description: body.slice(0, 150).replace(/\n/g, ' '),
-          });
-        }
-      }
-
-      if (extracted.length > 0) {
-        // Merge with DEFAULT_TEXT_MODELS to ensure primary models are always present
-        const combinedMap = new Map<string, CloudflareModelItem>();
-        for (const m of DEFAULT_TEXT_MODELS) combinedMap.set(m.id, m);
-        for (const m of extracted) {
-          if (!combinedMap.has(m.id)) combinedMap.set(m.id, m);
-        }
-
-        const result = Array.from(combinedMap.values());
-        if (kv) {
-          // Cache for 24 hours
-          await kv.put(cacheKey, JSON.stringify(result), { expirationTtl: 24 * 60 * 60 });
-        }
-        return result;
+        extracted.push({
+          id: modelId,
+          name: rawName,
+          author: `${body.split('Text Generation')[0]?.trim() || 'Cloudflare'} (Cloudflare)`,
+          task: 'Text Generation',
+          provider: 'cloudflare',
+          description: body.slice(0, 120).replace(/\n/g, ' '),
+        });
       }
     }
+    return extracted;
   } catch (err) {
-    console.error('Error fetching live Cloudflare models catalog:', err);
+    console.warn('Error fetching Cloudflare docs models:', err);
+    return [];
+  }
+}
+
+// Master model catalog combining Cloudflare AI & Backup Provider
+export async function fetchAllAvailableModels(
+  env: Env,
+  useCache: boolean = true
+): Promise<CloudflareModelItem[]> {
+  const cacheKey = 'cache:all_available_models_v2';
+
+  if (useCache && env.AI_NEWS_KV) {
+    const cached = await env.AI_NEWS_KV.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        // proceed
+      }
+    }
   }
 
-  return DEFAULT_TEXT_MODELS;
+  const [cfModels, backupModels] = await Promise.all([
+    fetchCloudflareDocsModels(),
+    fetchBackupModels(env.BACKUP_AI_URL, env.BACKUP_AI_KEY),
+  ]);
+
+  const map = new Map<string, CloudflareModelItem>();
+
+  // Add default curated first
+  for (const m of DEFAULT_MODELS) map.set(m.id, m);
+  for (const m of cfModels) if (!map.has(m.id)) map.set(m.id, m);
+  for (const m of backupModels) if (!map.has(m.id)) map.set(m.id, m);
+
+  const combined = Array.from(map.values());
+
+  if (env.AI_NEWS_KV && combined.length > 0) {
+    // Cache for 6 hours
+    await env.AI_NEWS_KV.put(cacheKey, JSON.stringify(combined), {
+      expirationTtl: 6 * 60 * 60,
+    });
+  }
+
+  return combined;
 }

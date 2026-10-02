@@ -1,10 +1,6 @@
 import { RawNewsItem } from './types';
-import {
-  getActiveModel,
-  getStyleMemory,
-  recordUsage,
-  addAuditLog,
-} from './memory';
+import { getActiveModel, getStyleMemory } from './memory';
+import { runUnifiedAiCompletion } from './ai_client';
 
 export function getWibInfo(): {
   dateStr: string;
@@ -38,18 +34,8 @@ export function getWibInfo(): {
   };
 }
 
-// Model Fallback Hierarchy
-const MODEL_CASCADE = [
-  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-  '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
-  '@cf/meta/llama-3.1-8b-instruct',
-  '@cf/qwen/qwen2.5-7b-instruct',
-  '@cf/google/gemma-2-9b-it',
-];
-
 export async function generateDailyNewsDigest(
-  ai: Ai,
-  kv: KVNamespace,
+  env: Env,
   newsItems: RawNewsItem[],
   forceRecap: boolean = false
 ): Promise<string> {
@@ -60,14 +46,14 @@ export async function generateDailyNewsDigest(
     return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada terobosan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi di edisi sebelumnya. Tetap pantau @aicomindo untuk update selanjutnya!\n\nLink Channel: t.me/aicomindo\n#AIUpdate #aicomindo`;
   }
 
-  // 10 items on Friday Weekly Recap, 5 items on daily edition
+  // 10 items on Friday, 5 on regular days
   const targetCount = isWeeklyRecap ? Math.min(10, Math.max(5, newsItems.length)) : Math.min(5, newsItems.length);
   const selected = newsItems.slice(0, targetCount);
 
-  // Retrieve custom few-shot template and active model from KV memory
+  // Retrieve style memory and active model from KV
   const [styleTemplate, activeModel] = await Promise.all([
-    getStyleMemory(kv),
-    getActiveModel(kv),
+    getStyleMemory(env.AI_NEWS_KV),
+    getActiveModel(env.AI_NEWS_KV),
   ]);
 
   const newsSummaryList = selected
@@ -124,36 +110,23 @@ FORMATTING RULES:
 
   const userPrompt = `Berikut adalah ${selected.length} bahan berita AI:\n\n${newsSummaryList}\n\nTuliskan postingan ${editionType} lengkap, panjang, dan berbobot sekarang mengikuti contoh gaya di atas:`;
 
-  // Build model attempt list starting with active model
-  const modelsToTry = [activeModel, ...MODEL_CASCADE.filter((m) => m !== activeModel)];
+  try {
+    const result = await runUnifiedAiCompletion(
+      env,
+      activeModel,
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      3500
+    );
 
-  for (const model of modelsToTry) {
-    try {
-      console.log(`[AI Generator] Attempting generation with model: ${model}`);
-      const response = (await ai.run(model as any, {
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 3500,
-        temperature: 0.7,
-      })) as { response?: string };
-
-      if (response && response.response && response.response.trim().length > 100) {
-        const text = response.response.trim();
-        // Record estimated tokens and neuron usage in KV
-        const estTokens = Math.round((systemPrompt.length + userPrompt.length + text.length) / 4);
-        await recordUsage(kv, estTokens, true);
-        return text;
-      }
-    } catch (err) {
-      console.warn(`[AI Generator] Model ${model} failed:`, err);
-      await addAuditLog(kv, 'MODEL_FALLBACK_TRIGGERED', 'System', `Model ${model} failed, cascading...`);
-    }
+    return result.text;
+  } catch (err) {
+    console.error('[AI Generator] Both active model and fallback failed:', err);
   }
 
-  // Fallback manual builder if all models are unavailable
-  console.error('[AI Generator] All AI models in cascade failed. Using structured template.');
+  // Graceful fallback structure
   const headline = isWeeklyRecap
     ? `🔥 <b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Gila Minggu Ini! 🛡️🤝💰</b>`
     : `⚡ <b>AI DAILY UPDATE: Gebrakan Terpanas Hari Ini! 🚀💡</b>`;

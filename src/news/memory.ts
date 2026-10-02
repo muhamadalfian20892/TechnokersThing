@@ -4,7 +4,12 @@ import {
   UsageMetric,
   AuditLogEntry,
   ChatMessage,
+  DashboardOtpRecord,
+  DashboardSessionRecord,
 } from './types';
+
+// Hardcoded Super Admin as requested: @alfian04121 (ID: 1023972475)
+export const SUPER_ADMIN_ID = '1023972475';
 
 // Fast SHA-256 for Cloudflare Workers Web Crypto API
 async function hashText(input: string): Promise<string> {
@@ -87,7 +92,8 @@ export async function setActiveModel(kv: KVNamespace, modelId: string): Promise<
 export async function recordUsage(
   kv: KVNamespace,
   tokensEstimated: number = 0,
-  isAiGen: boolean = true
+  isAiGen: boolean = true,
+  isBackup: boolean = false
 ): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
   const key = `usage:${today}`;
@@ -99,13 +105,14 @@ export async function recordUsage(
     aiGenerations: 0,
     totalTokensEstimated: 0,
     neuronsEstimated: 0,
+    backupAiRequests: 0,
   };
 
   if (raw) {
     try {
       metric = JSON.parse(raw);
     } catch {
-      // use default
+      // default
     }
   }
 
@@ -113,11 +120,13 @@ export async function recordUsage(
   if (isAiGen) {
     metric.aiGenerations += 1;
     metric.totalTokensEstimated += tokensEstimated;
-    // Estimated Neurons usage on Cloudflare Workers AI (~1.2 Neurons per token)
-    metric.neuronsEstimated += Math.round(tokensEstimated * 1.2);
+    if (isBackup) {
+      metric.backupAiRequests = (metric.backupAiRequests || 0) + 1;
+    } else {
+      metric.neuronsEstimated += Math.round(tokensEstimated * 1.2);
+    }
   }
 
-  // 14 days expiration for usage data
   await kv.put(key, JSON.stringify(metric), { expirationTtl: 14 * 24 * 60 * 60 });
 }
 
@@ -137,6 +146,7 @@ export async function getUsageStats(kv: KVNamespace, dateStr?: string): Promise<
     aiGenerations: 0,
     totalTokensEstimated: 0,
     neuronsEstimated: 0,
+    backupAiRequests: 0,
   };
 }
 
@@ -202,17 +212,23 @@ export async function resetStyleMemory(kv: KVNamespace): Promise<void> {
 }
 
 // ==========================================
-// 5. Admin Authorization
+// 5. Admin Authorization (Super Admin: 1023972475)
 // ==========================================
 
 export async function getAdminList(kv: KVNamespace): Promise<string[]> {
   const raw = await kv.get('config:admins');
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
+  let list: string[] = [SUPER_ADMIN_ID];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        list = Array.from(new Set([SUPER_ADMIN_ID, ...parsed]));
+      }
+    } catch {
+      // fallback
+    }
   }
+  return list;
 }
 
 export async function addAdmin(kv: KVNamespace, userId: string | number): Promise<void> {
@@ -226,14 +242,203 @@ export async function addAdmin(kv: KVNamespace, userId: string | number): Promis
 }
 
 export async function isUserAdmin(kv: KVNamespace, userId: string | number): Promise<boolean> {
+  const strId = String(userId);
+  if (strId === SUPER_ADMIN_ID) return true;
   const admins = await getAdminList(kv);
-  // If no admin is configured yet, the first user to chat or trigger is granted admin
-  if (admins.length === 0) return true;
-  return admins.includes(String(userId));
+  return admins.includes(strId);
 }
 
 // ==========================================
-// 6. Conversational Memory (Multi-turn chat)
+// 6. User Daily Chat Limit System (Default: 40/day)
+// ==========================================
+
+export async function getDailyChatLimit(kv: KVNamespace): Promise<number> {
+  const val = await kv.get('config:daily_chat_limit');
+  if (val === null) return 40; // Default 40
+  const num = parseInt(val, 10);
+  return isNaN(num) ? 40 : num;
+}
+
+export async function setDailyChatLimit(kv: KVNamespace, limit: number): Promise<void> {
+  await kv.put('config:daily_chat_limit', String(limit));
+  await addAuditLog(kv, 'SET_DAILY_CHAT_LIMIT', 'Admin', `Limit set to ${limit} (0=disabled)`);
+}
+
+export async function getUserDailyChatCount(
+  kv: KVNamespace,
+  userId: string | number,
+  dateStr: string
+): Promise<number> {
+  const key = `user_chat_count:${userId}:${dateStr}`;
+  const val = await kv.get(key);
+  return val ? parseInt(val, 10) || 0 : 0;
+}
+
+export async function incrementUserDailyChat(
+  kv: KVNamespace,
+  userId: string | number,
+  dateStr: string
+): Promise<number> {
+  const key = `user_chat_count:${userId}:${dateStr}`;
+  const current = await getUserDailyChatCount(kv, userId, dateStr);
+  const next = current + 1;
+  // TTL 48 hours
+  await kv.put(key, String(next), { expirationTtl: 48 * 60 * 60 });
+  return next;
+}
+
+export async function checkUserChatPermission(
+  kv: KVNamespace,
+  userId: string | number,
+  dateStr: string
+): Promise<{ allowed: boolean; count: number; limit: number; isAdmin: boolean }> {
+  const isAdmin = await isUserAdmin(kv, userId);
+  if (isAdmin) {
+    return { allowed: true, count: 0, limit: 0, isAdmin: true };
+  }
+
+  const limit = await getDailyChatLimit(kv);
+  // 0 means limit is disabled
+  if (limit === 0) {
+    return { allowed: true, count: 0, limit: 0, isAdmin: false };
+  }
+
+  const currentCount = await getUserDailyChatCount(kv, userId, dateStr);
+  if (currentCount >= limit) {
+    return { allowed: false, count: currentCount, limit, isAdmin: false };
+  }
+
+  return { allowed: true, count: currentCount, limit, isAdmin: false };
+}
+
+// ==========================================
+// 7. Web Dashboard OTP & Session Security
+// ==========================================
+
+// Generate 5-minute one-time authentication code for web dashboard
+export async function generateDashboardOtp(
+  kv: KVNamespace,
+  userId: string | number
+): Promise<string> {
+  // Generate a cryptographically random 6-digit numeric OTP code
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  const code = (100000 + (array[0] % 900000)).toString();
+
+  const record: DashboardOtpRecord = {
+    code,
+    createdBy: String(userId),
+    expiresAt: Date.now() + 5 * 60 * 1000, // 5 minutes
+  };
+
+  // Stored in KV with TTL 300 seconds (5 minutes)
+  await kv.put(`dashboard_otp:${code}`, JSON.stringify(record), { expirationTtl: 300 });
+  await addAuditLog(kv, 'GENERATE_DASHBOARD_OTP', String(userId), `Code generated`);
+  return code;
+}
+
+// Verify and consume OTP with 3 failed attempts lockout
+export async function verifyAndConsumeDashboardOtp(
+  kv: KVNamespace,
+  inputCode: string,
+  clientIp: string = 'unknown'
+): Promise<{ ok: boolean; sessionToken?: string; error?: string }> {
+  const cleanCode = inputCode.trim();
+  const lockKey = `login_lock:${clientIp}`;
+  const attemptsKey = `login_attempts:${clientIp}`;
+
+  // Check if IP is currently locked out
+  const isLocked = await kv.get(lockKey);
+  if (isLocked) {
+    return {
+      ok: false,
+      error: '⛔ Terlalu banyak percobaan gagal (3x). Akses login dikunci selama 15 menit demi keamanan.',
+    };
+  }
+
+  const otpKey = `dashboard_otp:${cleanCode}`;
+  const otpRaw = await kv.get(otpKey);
+
+  // If code is INVALID or EXPIRED
+  if (!otpRaw) {
+    const rawAttempts = await kv.get(attemptsKey);
+    const attempts = rawAttempts ? parseInt(rawAttempts, 10) + 1 : 1;
+
+    if (attempts >= 3) {
+      // Lock out for 15 minutes (900 seconds)
+      await kv.put(lockKey, 'LOCKED', { expirationTtl: 900 });
+      await kv.delete(attemptsKey);
+      await addAuditLog(kv, 'LOGIN_LOCKOUT_TRIGGERED', clientIp, '3 failed login attempts');
+      return {
+        ok: false,
+        error: '⛔ Anda telah gagal 3 kali. Akses login dikunci selama 15 menit.',
+      };
+    } else {
+      await kv.put(attemptsKey, String(attempts), { expirationTtl: 900 });
+      return {
+        ok: false,
+        error: `⚠️ Kode otentikasi salah atau sudah kedaluwarsa. Sisa percobaan: ${3 - attempts} kali.`,
+      };
+    }
+  }
+
+  // Code is VALID!
+  // 1. Immediately delete code from KV so it CANNOT be used again (Single Use)
+  await kv.delete(otpKey);
+  // 2. Clear failed attempts
+  await kv.delete(attemptsKey);
+
+  // 3. Generate secure session token (32-character random hex)
+  const sessionBuffer = new Uint8Array(16);
+  crypto.getRandomValues(sessionBuffer);
+  const sessionToken = Array.from(sessionBuffer)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  let otpData: DashboardOtpRecord = { code: cleanCode, createdBy: SUPER_ADMIN_ID, expiresAt: 0 };
+  try {
+    otpData = JSON.parse(otpRaw);
+  } catch {
+    // pass
+  }
+
+  const sessionRecord: DashboardSessionRecord = {
+    token: sessionToken,
+    userId: otpData.createdBy,
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+  };
+
+  // Save session for 24 hours
+  await kv.put(`dashboard_session:${sessionToken}`, JSON.stringify(sessionRecord), {
+    expirationTtl: 24 * 60 * 60,
+  });
+
+  await addAuditLog(kv, 'DASHBOARD_LOGIN_SUCCESS', otpData.createdBy, `IP: ${clientIp}`);
+
+  return { ok: true, sessionToken };
+}
+
+export async function verifyDashboardSession(
+  kv: KVNamespace,
+  sessionToken: string
+): Promise<boolean> {
+  if (!sessionToken) return false;
+  const raw = await kv.get(`dashboard_session:${sessionToken}`);
+  return raw !== null;
+}
+
+export async function revokeDashboardSession(
+  kv: KVNamespace,
+  sessionToken: string
+): Promise<void> {
+  if (sessionToken) {
+    await kv.delete(`dashboard_session:${sessionToken}`);
+  }
+}
+
+// ==========================================
+// 8. Conversational Memory (Multi-turn chat)
 // ==========================================
 
 export async function getUserChatHistory(
@@ -256,19 +461,18 @@ export async function saveUserChatHistory(
   messages: ChatMessage[]
 ): Promise<void> {
   const key = `chat_ctx:${userId}`;
-  // Keep last 8 messages (4 turns) with 2 hours TTL
   const trimmed = messages.slice(-8);
   await kv.put(key, JSON.stringify(trimmed), { expirationTtl: 2 * 60 * 60 });
 }
 
 // ==========================================
-// 7. Anti-Spam Rate Limiting (Sliding Window)
+// 9. Anti-Spam Rate Limiting (Sliding Window)
 // ==========================================
 
 export async function checkRateLimit(
   kv: KVNamespace,
   userId: string | number,
-  maxPerMinute: number = 15
+  maxPerMinute: number = 20
 ): Promise<{ allowed: boolean; remaining: number }> {
   const minuteKey = `ratelimit:${userId}:${Math.floor(Date.now() / 60000)}`;
   const current = await kv.get(minuteKey);
@@ -283,7 +487,7 @@ export async function checkRateLimit(
 }
 
 // ==========================================
-// 8. Audit Logging & System Trail
+// 10. Audit Logging & System Trail
 // ==========================================
 
 export async function addAuditLog(
@@ -326,7 +530,7 @@ export async function getAuditLogs(kv: KVNamespace): Promise<AuditLogEntry[]> {
 }
 
 // ==========================================
-// 9. Manual News Injector (Admin Breaking News)
+// 11. Manual News Injector
 // ==========================================
 
 export async function addInjectedNews(kv: KVNamespace, item: RawNewsItem): Promise<void> {
@@ -359,7 +563,7 @@ export async function clearInjectedNews(kv: KVNamespace): Promise<void> {
 }
 
 // ==========================================
-// 10. News Deduplication & Search Archive
+// 12. News Deduplication & Search Archive
 // ==========================================
 
 export async function isNewsAlreadyPosted(kv: KVNamespace, item: RawNewsItem): Promise<boolean> {

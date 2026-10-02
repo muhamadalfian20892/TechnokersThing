@@ -20,6 +20,7 @@ export interface UsageMetric {
   aiGenerations: number;
   totalTokensEstimated: number;
   neuronsEstimated: number;
+  backupAiRequests: number;
 }
 
 export interface AuditLogEntry {
@@ -34,10 +35,24 @@ export interface CloudflareModelItem {
   name: string;
   author: string;
   task: string;
+  provider: 'cloudflare' | 'backup';
   description?: string;
 }
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+}
+
+export interface DashboardOtpRecord {
+  code: string;
+  createdBy: string;
+  expiresAt: number;
+}
+
+export interface DashboardSessionRecord {
+  token: string;
+  userId: string;
+  createdAt: string;
+  expiresAt: number;
 }

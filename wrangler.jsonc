@@ -19,6 +19,8 @@
     ]
   },
   "vars": {
-    "CHANNEL_ID": "@aicomindo"
+    "CHANNEL_ID": "@aicomindo",
+    "BACKUP_AI_URL": "https://api.mrido1.my.id/v1",
+    "BACKUP_AI_KEY": "sk-f67c79a11d5aa798-ljy78q-0e793017"
   }
 }
