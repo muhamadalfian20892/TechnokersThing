@@ -14,8 +14,30 @@ export interface PostedNewsRecord {
   postedAt: string;
 }
 
-export interface DigestGenerationResult {
-  messageText: string;
-  selectedNews: RawNewsItem[];
-  postedCount: number;
+export interface UsageMetric {
+  date: string;
+  totalRequests: number;
+  aiGenerations: number;
+  totalTokensEstimated: number;
+  neuronsEstimated: number;
+}
+
+export interface AuditLogEntry {
+  timestamp: string;
+  action: string;
+  actor: string;
+  details?: string;
+}
+
+export interface CloudflareModelItem {
+  id: string;
+  name: string;
+  author: string;
+  task: string;
+  description?: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
 }

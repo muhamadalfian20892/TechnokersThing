@@ -1,4 +1,10 @@
 import { RawNewsItem } from './types';
+import {
+  getActiveModel,
+  getStyleMemory,
+  recordUsage,
+  addAuditLog,
+} from './memory';
 
 export function getWibInfo(): {
   dateStr: string;
@@ -32,8 +38,18 @@ export function getWibInfo(): {
   };
 }
 
+// Model Fallback Hierarchy
+const MODEL_CASCADE = [
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+  '@cf/meta/llama-3.1-8b-instruct',
+  '@cf/qwen/qwen2.5-7b-instruct',
+  '@cf/google/gemma-2-9b-it',
+];
+
 export async function generateDailyNewsDigest(
   ai: Ai,
+  kv: KVNamespace,
   newsItems: RawNewsItem[],
   forceRecap: boolean = false
 ): Promise<string> {
@@ -41,12 +57,18 @@ export async function generateDailyNewsDigest(
   const isWeeklyRecap = isFriday || forceRecap;
 
   if (newsItems.length === 0) {
-    return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada pergerakan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi sebelumnya. Pantau terus @aicomindo untuk update selanjutnya!\n\nLink Channel: t.me/aicomindo\n#AIUpdate #aicomindo`;
+    return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada terobosan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi di edisi sebelumnya. Tetap pantau @aicomindo untuk update selanjutnya!\n\nLink Channel: t.me/aicomindo\n#AIUpdate #aicomindo`;
   }
 
-  // On Friday (Weekly Recap), select 7-10 stories; on regular days, select 4-5 stories
+  // 10 items on Friday Weekly Recap, 5 items on daily edition
   const targetCount = isWeeklyRecap ? Math.min(10, Math.max(5, newsItems.length)) : Math.min(5, newsItems.length);
   const selected = newsItems.slice(0, targetCount);
+
+  // Retrieve custom few-shot template and active model from KV memory
+  const [styleTemplate, activeModel] = await Promise.all([
+    getStyleMemory(kv),
+    getActiveModel(kv),
+  ]);
 
   const newsSummaryList = selected
     .map(
@@ -55,93 +77,90 @@ export async function generateDailyNewsDigest(
 Judul: ${item.title}
 Sumber: ${item.source}
 Link: ${item.url}
-Snippet/Info: ${item.snippet || 'None'}`
+Rangkuman Singkat: ${item.snippet || 'None'}`
     )
     .join('\n\n');
 
-  const editionType = isWeeklyRecap ? 'WEEKLY TECH & AI RECAP (EDISI JUMAT)' : 'DAILY AI UPDATE';
+  const editionType = isWeeklyRecap
+    ? 'WEEKLY TECH & AI RECAP (EDISI JUMAT - 10 GEBRAKAN)'
+    : 'DAILY AI UPDATE (EDISI HARIAN - 5 TEROBOSAN)';
 
-  const systemPrompt = `Kamu adalah Lead Tech Content Creator dan AI Journalist untuk channel Telegram "@aicomindo" (AI Community News Indonesia).
-Kamu memiliki gaya penulisan yang SANGAT MENARIK, BOLD, BERBOBOT, DILENGKAPI FAKTA & ANGKA, serta menggunakan bahasa Indonesia gaul-profesional ala tech insider Indonesia (seperti postingan viral di LinkedIn/Twitter tech).
+  const systemPrompt = `Kamu adalah Lead Tech Content Creator dan Senior AI Journalist untuk channel Telegram "@aicomindo" (AI Community News Indonesia).
+Kamu memiliki gaya penulisan yang SANGAT MENARIK, BOLD, DETAIL, BERBOBOT, DILENGKAPI FAKTA & ANGKA, serta menggunakan bahasa Indonesia gaul-profesional khas tech insider (seperti postingan viral di LinkedIn/Twitter tech).
 
 TUGASMU:
-Tulis postingan ${editionType} berdasarkan bahan berita yang disediakan.
+Tulis postingan ${editionType} berdasarkan ${selected.length} bahan berita yang diberikan.
 
-GAYA PENULISAN WAJIB MENGIKUTI CONTOH BERIKUT SECARA PERSIS:
+PANDUAN UTAMA PANJANG & KUALITAS BERITA (SANGAT PENTING!):
+1. JANGAN PERNAH MENULIS BERITA PENDEK ATAU CUMA 1 KALIMAT!
+2. Setiap nomor berita WAJIB DITULIS 1 PARAGRAF UTUH (3 hingga 5 kalimat padat dan mendalam).
+3. Isi setiap poin berita harus menguraikan:
+   - SIAPA dan AKSI NYA (Misal: Google akuisisi Wiz, Meta gandeng Broadcom, dsb.)
+   - NILAI / ANGKA jika ada (Misal: $32 Miliar, Rp 500 Triliun, 100 ribu GPU, dsb.)
+   - ALASAN KORPORAT / LATAR BELAKANG di balik keputusan tersebut
+   - DAMPAK NYATA bagi industri, privasi data, atau pengguna sehari-hari
+   - Tautan sumber di akhir paragraf dalam format: (Sumber: <a href="LINK">NamaSumber</a>)
+
+BERIKUT ADALAH MEMORI CONTOH GAYA & KEDALAMAN PENULISAN YANG WAJIB KAMU TIRU PERSIS:
 ---
-[Headline Bombastis/Viral yang Mewakili Berita Terbesar dengan 2-3 Emoji] 🛡️🤝💰
-
-${isWeeklyRecap ? 'Seminggu terakhir ini dunia tech bener-bener gak kasih kita napas. Buat kalian yang gak mau pusing ketinggalan info, ini rangkuman gebrakan paling gila yang bakal ngerubah masa depan ekosistem digital kita. Langsung sikat:' : 'Perkembangan AI hari ini geraknya kenceng banget! Buat kalian yang mau tetep relevan dan gak mau FOMO, ini update paling gila hari ini yang wajib kalian tahu. Langsung sikat:'}
-
-1. [Judul Poin Berita Singkat Padat Menohok!] [Emoji]
-[Tulis 2-3 kalimat substansial dan mendalam! Jangan cuma sebut link. Jelaskan SIAPA, APA AKSI NYA, MENGAPA MEREKA MELAKUKANNYA, ANGKA/NILAINYA jika ada, dan APA DAMPAKNYA bagi ekosistem/pengguna. Sertakan link sumber di akhir kalimat: (Sumber: <a href="LINK">NamaSumber</a>)]
-
-2. [Judul Poin Berita 2] [Emoji]
-[Penjelasan mendalam 2-3 kalimat berisi fakta nyata dan implikasi...]
-
-... [Lanjutkan hingga semua ${selected.length} berita]
-
-Pandangan Saya:
-[1-2 kalimat opini/analisis tajam tentang tren besar di balik berita-berita ini, misalnya pergeseran ke AI Agentic, perang chip hardware, privasi data, dll.]
-
-Nah, dari berita di atas, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih opini kalian di bawah! 🚀🧪
-
-Link Channel: t.me/aicomindo
-#TechRecap #AIUpdate #KecerdasanBuatan #OpenAI #Google #Meta #FutureOfWork #aicomindo
+${styleTemplate}
 ---
 
-ATURAN FORMATTING SANGAT PENTING:
+FORMATTING RULES:
 1. Gunakan tag format HTML Telegram:
-   - <b>Teks tebal</b> untuk headline dan judul nomor berita
-   - <i>Teks miring</i> jika diperlukan
+   - <b>Teks tebal</b> untuk headline utama dan judul nomor berita
+   - <i>Teks miring</i> jika perlu
    - <a href="URL">Teks Link</a> untuk tautan sumber asli
-   JANGAN gunakan markdown syntax asterisks (** atau * atau #).
-2. BERITA HARUS BENAR-BENAR DICERITAKAN (BERBOBOT)! Jangan hanya link pendek tanpa penjelasan. Pembaca harus paham beritanya langsung dari membaca teksmu tanpa harus buka link.
-3. Jangan halusinasi link, gunakan URL asli yang diberikan di data.`;
+   JANGAN gunakan format Markdown asterisks (** atau * atau #).
+2. Ikuti struktur persis contoh:
+   - Headline Utama Menohok dengan 2-3 Emoji
+   - Paragraf Pembuka ("Dua minggu/seminggu terakhir ini dunia tech bener-bener gak kasih kita napas...")
+   - Poin-poin berita bernomor 1 sampai ${selected.length} dengan penjelasan panjang dan berbobot
+   - Bagian "Pandangan Saya:" (opini/analisis tajam tentang pergeseran tren besar)
+   - Pertanyaan pemicu diskusi interaktif
+   - Tautan channel: t.me/aicomindo
+   - Hashtags relevan
+3. Gunakan URL asli yang diberikan di data.`;
 
-  const userPrompt = `Berikut adalah ${selected.length} berita AI ${isWeeklyRecap ? 'untuk Weekly Recap' : 'hari ini'}:\n\n${newsSummaryList}\n\nTuliskan postingan lengkap sekarang sesuai format dan gaya penulisan di atas:`;
+  const userPrompt = `Berikut adalah ${selected.length} bahan berita AI:\n\n${newsSummaryList}\n\nTuliskan postingan ${editionType} lengkap, panjang, dan berbobot sekarang mengikuti contoh gaya di atas:`;
 
-  try {
-    const response = (await ai.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      max_tokens: 2200,
-      temperature: 0.7,
-    })) as { response?: string };
+  // Build model attempt list starting with active model
+  const modelsToTry = [activeModel, ...MODEL_CASCADE.filter((m) => m !== activeModel)];
 
-    if (response && response.response) {
-      return response.response.trim();
-    }
-  } catch (err) {
-    console.warn('Llama 3.3 failed, falling back to Llama 3.1 8B:', err);
+  for (const model of modelsToTry) {
     try {
-      const fallbackResponse = (await ai.run('@cf/meta/llama-3.1-8b-instruct', {
+      console.log(`[AI Generator] Attempting generation with model: ${model}`);
+      const response = (await ai.run(model as any, {
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        max_tokens: 1800,
+        max_tokens: 3500,
         temperature: 0.7,
       })) as { response?: string };
 
-      if (fallbackResponse && fallbackResponse.response) {
-        return fallbackResponse.response.trim();
+      if (response && response.response && response.response.trim().length > 100) {
+        const text = response.response.trim();
+        // Record estimated tokens and neuron usage in KV
+        const estTokens = Math.round((systemPrompt.length + userPrompt.length + text.length) / 4);
+        await recordUsage(kv, estTokens, true);
+        return text;
       }
-    } catch (fallbackErr) {
-      console.error('All AI models failed:', fallbackErr);
+    } catch (err) {
+      console.warn(`[AI Generator] Model ${model} failed:`, err);
+      await addAuditLog(kv, 'MODEL_FALLBACK_TRIGGERED', 'System', `Model ${model} failed, cascading...`);
     }
   }
 
-  // Manual fallback structure if AI fails
+  // Fallback manual builder if all models are unavailable
+  console.error('[AI Generator] All AI models in cascade failed. Using structured template.');
   const headline = isWeeklyRecap
-    ? `🔥 <b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Gila Minggu Ini!</b>`
-    : `⚡ <b>AI DAILY UPDATE: Terobosan Terpanas Hari Ini!</b>`;
+    ? `🔥 <b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Gila Minggu Ini! 🛡️🤝💰</b>`
+    : `⚡ <b>AI DAILY UPDATE: Gebrakan Terpanas Hari Ini! 🚀💡</b>`;
 
   const intro = isWeeklyRecap
-    ? `Seminggu terakhir ini dunia tech bener-bener gak kasih kita napas! Ini rangkuman berita penting yang bakal ngerubah masa depan digital kita:`
-    : `Dunia AI bergerak super cepat hari ini. Ini rangkuman perkembangan penting yang wajib kamu pantau:`;
+    ? `Seminggu terakhir ini dunia tech bener-bener gak kasih kita napas. Buat kalian yang gak mau pusing ketinggalan info, ini rangkuman gebrakan paling gila yang bakal ngerubah masa depan ekosistem digital kita. Langsung sikat:`
+    : `Perkembangan AI hari ini geraknya kenceng banget! Buat kalian yang mau tetep relevan dan gak mau FOMO, ini update paling gila hari ini yang wajib kalian tahu. Langsung sikat:`;
 
   return [
     headline,
@@ -150,14 +169,14 @@ ATURAN FORMATTING SANGAT PENTING:
     ``,
     ...selected.map(
       (item, idx) =>
-        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} (<a href="${item.url}">Baca di ${escapeHtml(item.source)}</a>)\n`
+        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} Langkah strategis ini memperlihatkan bagaimana raksasa teknologi terus berakselerasi untuk mengamankan dominasi di pasar kecerdasan buatan. Implikasinya akan sangat terasa pada ekosistem pengguna dan percepatan adopsi industri. (Sumber: <a href="${item.url}">${escapeHtml(item.source)}</a>)\n`
     ),
-    `<b>Pandangan Saya:</b>\nPerkembangan AI kian nyata beralih dari sekadar model obrolan menjadi agen otomatis dan integrasi mendalam ke kehidupan sehari-hari.`,
+    `<b>Pandangan Saya:</b>\nKita bener-bener lagi transisi dari AI yang cuma "pinter jawab" jadi AI yang "pinter kerja" (Agentic). Dari chip sampe software, semuanya lagi berevolusi gila-gilaan.`,
     ``,
-    `Nah, mana menurut kalian yang paling berdampak? Yuk diskusi! 🚀`,
+    `Nah, dari berita di atas, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih opini kalian di bawah! 🚀🧪`,
     ``,
     `Link Channel: t.me/aicomindo`,
-    `#TechRecap #AIUpdate #aicomindo`,
+    `#TechRecap #AIUpdate #Google #Meta #OpenAI #aicomindo`,
   ].join('\n');
 }
 

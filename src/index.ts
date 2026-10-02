@@ -15,8 +15,13 @@ import {
   setPostingPaused,
   hasPostedToday,
   markPostedToday,
+  getActiveModel,
+  getUsageStats,
+  getInjectedNews,
+  clearInjectedNews,
 } from './news/memory';
 import { generateDailyNewsDigest, getWibInfo } from './news/generator';
+import { fetchLiveCloudflareModels } from './news/models';
 
 // Pipeline to execute daily news posting to the channel
 export async function executeDailyNewsPosting(
@@ -41,7 +46,7 @@ export async function executeDailyNewsPosting(
     };
   }
 
-  // 2. Strict One-Post-Per-Day Lock (Prevents duplicate posts or spamming)
+  // 2. Strict One-Post-Per-Day Lock
   const alreadyPosted = await hasPostedToday(env.AI_NEWS_KV, dateStr);
   if (alreadyPosted && !force) {
     console.log(`[Scheduler] Already posted digest today (${dateStr}). Skipping.`);
@@ -53,25 +58,29 @@ export async function executeDailyNewsPosting(
   }
 
   console.log('[Scheduler] Fetching latest AI news...');
-  const candidates = await fetchLatestAINews();
-  console.log(`[Scheduler] Fetched ${candidates.length} news candidates.`);
+  const [candidates, injected] = await Promise.all([
+    fetchLatestAINews(),
+    getInjectedNews(env.AI_NEWS_KV),
+  ]);
+
+  // Merge manual injected news with fetched news
+  const mergedNews = [...injected, ...candidates];
 
   // Filter against KV memory to eliminate duplicate news
-  const unposted = await filterUnpostedNews(env.AI_NEWS_KV, candidates);
-  console.log(`[Scheduler] Identified ${unposted.length} unposted news candidates.`);
+  const unposted = await filterUnpostedNews(env.AI_NEWS_KV, mergedNews);
+  console.log(`[Scheduler] Total candidates: ${mergedNews.length}, Unposted: ${unposted.length}`);
 
-  // On Friday (Weekly Recap), take up to 10 items; on regular days, take up to 5 items
+  // 10 items on Friday, 5 on regular days
   const targetCount = isFriday ? 10 : 5;
   let itemsToPost = unposted.slice(0, targetCount);
 
-  // If unposted pool is smaller than target, supplement with top candidate stories
-  if (itemsToPost.length < (isFriday ? 5 : 3) && candidates.length > 0) {
-    itemsToPost = candidates.slice(0, targetCount);
+  if (itemsToPost.length < (isFriday ? 5 : 3) && mergedNews.length > 0) {
+    itemsToPost = mergedNews.slice(0, targetCount);
   }
 
   // Generate in-depth narrative digest
   console.log(`[Scheduler] Generating digest for ${itemsToPost.length} items (isFriday=${isFriday})...`);
-  const digestHtml = await generateDailyNewsDigest(env.AI, itemsToPost, isFriday);
+  const digestHtml = await generateDailyNewsDigest(env.AI, env.AI_NEWS_KV, itemsToPost, isFriday);
 
   // Publish to Telegram Channel
   console.log(`[Scheduler] Publishing to channel ${env.CHANNEL_ID}...`);
@@ -90,6 +99,11 @@ export async function executeDailyNewsPosting(
         itemsToPost,
         isFriday ? `Weekly Recap (${formattedDate})` : `Daily Update (${formattedDate})`
       );
+    }
+
+    // Clear injected news queue
+    if (injected.length > 0) {
+      await clearInjectedNews(env.AI_NEWS_KV);
     }
 
     return {
@@ -151,25 +165,30 @@ export default {
     // 3. Webhook & Bot Diagnostics
     if (url.pathname === '/telegram/status') {
       const { dateStr, isFriday, formattedDate } = getWibInfo();
-      const [botInfo, webhookInfo, history, lastStats, paused, postedToday] = await Promise.all([
-        getTelegramMe(env.TELEGRAM_TOKEN),
-        getTelegramWebhookInfo(env.TELEGRAM_TOKEN),
-        getRecentPostedHistory(env.AI_NEWS_KV),
-        getLastDigestStats(env.AI_NEWS_KV),
-        isPostingPaused(env.AI_NEWS_KV),
-        hasPostedToday(env.AI_NEWS_KV, dateStr),
-      ]);
+      const [botInfo, webhookInfo, history, lastStats, paused, postedToday, activeModel, usage] =
+        await Promise.all([
+          getTelegramMe(env.TELEGRAM_TOKEN),
+          getTelegramWebhookInfo(env.TELEGRAM_TOKEN),
+          getRecentPostedHistory(env.AI_NEWS_KV),
+          getLastDigestStats(env.AI_NEWS_KV),
+          isPostingPaused(env.AI_NEWS_KV),
+          hasPostedToday(env.AI_NEWS_KV, dateStr),
+          getActiveModel(env.AI_NEWS_KV),
+          getUsageStats(env.AI_NEWS_KV),
+        ]);
 
       return Response.json({
         botInfo,
         webhookInfo,
+        activeModel,
         postingControl: {
           isPaused: paused,
-          status: paused ? 'PAUSED (Posting Dihentikan)' : 'ACTIVE (Aktif)',
+          status: paused ? 'PAUSED' : 'ACTIVE',
           hasPostedToday: postedToday,
           todayDateWIB: `${formattedDate} (${dateStr})`,
           isFridayWeeklyRecap: isFriday,
         },
+        usageMetrics: usage,
         kvMemory: {
           storedNewsCount: history.length,
           lastDigest: lastStats,
@@ -180,24 +199,53 @@ export default {
       });
     }
 
-    // 4. Manual Trigger (Force post)
+    // 4. Cloudflare Live Models Catalog API
+    if (url.pathname === '/api/models') {
+      const models = await fetchLiveCloudflareModels(env.AI_NEWS_KV);
+      const activeModel = await getActiveModel(env.AI_NEWS_KV);
+      return Response.json({ activeModel, models });
+    }
+
+    // 5. Usage & Quota Monitor API
+    if (url.pathname === '/api/usage') {
+      const stats = await getUsageStats(env.AI_NEWS_KV);
+      return Response.json({
+        stats,
+        freeTierDailyNeuronsQuota: 10000,
+        quotaUsedPercentage: Math.min(100, (stats.neuronsEstimated / 10000) * 100),
+      });
+    }
+
+    // 6. System Health Check API
+    if (url.pathname === '/api/health') {
+      const t0 = Date.now();
+      await env.AI_NEWS_KV.get('config:active_model');
+      const kvMs = Date.now() - t0;
+      return Response.json({
+        status: 'healthy',
+        kvLatencyMs: kvMs,
+        uptime: 'Cloudflare Edge Global',
+      });
+    }
+
+    // 7. Manual Trigger (Force post)
     if (url.pathname === '/api/trigger-news') {
       const force = url.searchParams.get('force') === 'true';
       const result = await executeDailyNewsPosting(env, force);
       return Response.json(result);
     }
 
-    // 5. Dry Run / Preview Digest
+    // 8. Dry Run / Preview Digest
     if (url.pathname === '/api/preview-news') {
       const { isFriday, formattedDate } = getWibInfo();
       const candidates = await fetchLatestAINews();
       const unposted = await filterUnpostedNews(env.AI_NEWS_KV, candidates);
       const targetCount = isFriday ? 10 : 5;
       const itemsToPost = unposted.length > 0 ? unposted.slice(0, targetCount) : candidates.slice(0, targetCount);
-      const digestHtml = await generateDailyNewsDigest(env.AI, itemsToPost, isFriday);
+      const digestHtml = await generateDailyNewsDigest(env.AI, env.AI_NEWS_KV, itemsToPost, isFriday);
 
       return Response.json({
-        mode: isFriday ? 'WEEKLY RECAP (Jumat)' : 'DAILY AI UPDATE',
+        mode: isFriday ? 'WEEKLY RECAP (Jumat - 10 Gebrakan)' : 'DAILY AI UPDATE (5 Terobosan)',
         dateWIB: formattedDate,
         totalCandidates: candidates.length,
         unpostedCandidates: unposted.length,
@@ -206,7 +254,7 @@ export default {
       });
     }
 
-    // 6. Pause / Resume Web API Endpoints
+    // 9. Pause / Resume Web Endpoints
     if (url.pathname === '/api/pause') {
       await setPostingPaused(env.AI_NEWS_KV, true);
       return Response.json({ ok: true, status: 'PAUSED' });
@@ -217,16 +265,16 @@ export default {
       return Response.json({ ok: true, status: 'ACTIVE' });
     }
 
-    // 7. Homepage Dashboard
+    // 10. Dashboard Homepage
     return new Response(
       `<!DOCTYPE html>
 <html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Technokers AI Bot & News Digest</title>
+  <title>Technokers AI Bot Pro - Dashboard</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: 0 auto; line-height: 1.6; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 850px; margin: 0 auto; line-height: 1.6; }
     h1 { color: #38bdf8; display: flex; align-items: center; gap: 0.5rem; }
     .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid #334155; }
     .badge { display: inline-block; background: #0284c7; color: white; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.875rem; font-weight: bold; }
@@ -235,33 +283,29 @@ export default {
     .btn { display: inline-block; background: #2563eb; color: white; padding: 0.5rem 1rem; border-radius: 8px; font-weight: 500; margin-right: 0.5rem; margin-top: 0.5rem; }
     .btn:hover { background: #1d4ed8; text-decoration: none; }
     .btn-danger { background: #dc2626; }
-    .btn-danger:hover { background: #b91c1c; }
     .btn-success { background: #16a34a; }
-    .btn-success:hover { background: #15803d; }
     code { background: #0f172a; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; color: #a5f3fc; }
   </style>
 </head>
 <body>
-  <h1>🤖 Technokers AI Worker</h1>
+  <h1>🤖 Technokers AI Bot Pro</h1>
   <div class="card">
-    <p><span class="badge">ONLINE</span> Cloudflare Workers & Workers AI</p>
-    <p>Bot ini aktif mengkurasi berita AI global secara otomatis untuk channel Telegram <a href="https://t.me/aicomindo" target="_blank"><b>@aicomindo</b></a>.</p>
-    <p>⏰ <b>Jadwal Posting:</b> Tepat 1x sehari pukul <b>18:00 WIB</b> (11:00 UTC).</p>
-    <p>📅 <b>Format Hari:</b></p>
-    <ul>
-      <li><b>Jumat:</b> Weekly Tech & AI Recap (7-10 Gebrakan AI terbesar seminggu).</li>
-      <li><b>Hari Lain:</b> Daily AI Update (3-5 Berita paling berdampak).</li>
-    </ul>
-    <p>🛡️ <b>Anti-Spam & Kunci Harian:</b> Diproteksi kunci harian di Cloudflare KV agar tidak pernah posting ganda.</p>
+    <p><span class="badge">STABLE v2.0</span> Cloudflare Workers & Workers AI</p>
+    <p>Bot kurasi berita AI otomatis & asisten interaktif untuk channel <a href="https://t.me/aicomindo" target="_blank"><b>@aicomindo</b></a>.</p>
+    <p>⏰ <b>Jadwal:</b> Tepat 1x Sehari (Pukul <b>18:00 WIB</b> / 11:00 UTC).</p>
+    <p>🛡️ <b>20 Stabilities:</b> Kunci anti-spam harian, live catalog model switcher, usage monitor, few-shot style memory, dan conversational multi-turn chat.</p>
   </div>
 
   <div class="card">
-    <h3>🔗 Quick Action Endpoints</h3>
-    <a class="btn" href="/telegram/status" target="_blank">Cek Status & Memory KV</a>
-    <a class="btn" href="/api/preview-news" target="_blank">Preview Berita Hari Ini</a>
+    <h3>🔗 Quick Action APIs</h3>
+    <a class="btn" href="/telegram/status" target="_blank">Cek Status & KV</a>
+    <a class="btn" href="/api/models" target="_blank">Live Cloudflare Models</a>
+    <a class="btn" href="/api/usage" target="_blank">Monitor Usage & Limit</a>
+    <a class="btn" href="/api/health" target="_blank">Health & Latency</a>
+    <a class="btn" href="/api/preview-news" target="_blank">Preview Berita AI</a>
     <a class="btn btn-danger" href="/api/pause" target="_blank">🛑 Pause Posting</a>
     <a class="btn btn-success" href="/api/resume" target="_blank">🟢 Resume Posting</a>
-    <a class="btn" href="https://t.me/tckn_bot" target="_blank">Chat @tckn_bot</a>
+    <a class="btn" href="https://t.me/tckn_bot" target="_blank">Buka @tckn_bot</a>
   </div>
 </body>
 </html>`,
