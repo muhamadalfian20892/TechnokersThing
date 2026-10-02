@@ -1,11 +1,13 @@
 export type JobType = 'reminder' | 'cron';
 export type JobStatus = 'active' | 'completed' | 'cancelled';
+export type JobPlatform = 'telegram' | 'dashboard';
 
 export interface ScheduledJob {
   id: string;                      // Unique ID, e.g. "job_1727891234567_xyz"
   type: JobType;                   // 'reminder' (sekali jalan) atau 'cron' (berulang)
   message: string;                 // Konten pesan pengingat / tugas
-  targetChatId: string | number;   // Chat ID Telegram tujuan (User ID atau Channel @aicomindo)
+  targetPlatform: JobPlatform;     // 'telegram' atau 'dashboard'
+  targetChatId: string | number;   // Chat ID Telegram tujuan (User ID, Channel, atau 'dashboard')
   threadId?: number;               // Thread ID jika di forum/topik Telegram
   creatorId: string | number;      // User ID pembuat
   creatorName?: string;            // Nama pembuat (cth: "Muhamad Alfian")
@@ -30,7 +32,30 @@ export interface ParseJobResult {
   dueAt?: number;
   cronExpression?: string;
   message?: string;
+  targetPlatform?: JobPlatform;
   targetChatId?: string | number;
+  destinationRequested?: 'here' | 'telegram' | 'channel' | 'unspecified';
+  explicitTelegramUser?: string;
   humanDescription?: string;
   error?: string;
+}
+
+export interface WebNotification {
+  id: string;
+  jobId: string;
+  message: string;
+  scheduleRaw: string;
+  firedAt: number;
+  read: boolean;
+}
+
+export interface PendingReminderState {
+  message: string;
+  scheduleRaw: string;
+  dueAt?: number;
+  cronExpression?: string;
+  humanDescription?: string;
+  type: JobType;
+  createdAt: number;
+  expiresAt: number;
 }

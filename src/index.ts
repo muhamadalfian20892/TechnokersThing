@@ -51,6 +51,9 @@ import {
   processReminderIntent,
   formatReminderNotification,
   formatCronNotification,
+  getWebNotifications,
+  addWebNotification,
+  dismissWebNotifications,
 } from './scheduler/manager';
 import { parseScheduleInput } from './scheduler/parser';
 import { ScheduledJob } from './scheduler/types';
@@ -490,7 +493,8 @@ export default {
           1023972475,
           'Muhamad Alfian',
           1023972475,
-          true
+          true,
+          'web_dashboard'
         );
 
         let replyText = '';
@@ -576,10 +580,12 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
           return Response.json({ ok: false, error: parsed.error || 'Format jadwal tidak valid.' }, { status: 400 });
         }
 
+        const isDashboard = target === 'dashboard' || target === 'web';
         const newJob: ScheduledJob = {
           id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           type: (body.type as any) || parsed.type || 'reminder',
           message: parsed.message || msg,
+          targetPlatform: isDashboard ? 'dashboard' : 'telegram',
           targetChatId: target,
           creatorId: '1023972475',
           creatorName: 'Muhamad Alfian (Web Admin)',
@@ -615,12 +621,48 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
       const target = jobs.find((j) => j.id === body.id);
       if (!target) return Response.json({ ok: false, error: 'Jadwal tidak ditemukan' }, { status: 404 });
 
-      const text = target.type === 'cron' ? formatCronNotification(target) : formatReminderNotification(target);
-      const sendRes = await sendTelegramMessage(env.TELEGRAM_TOKEN, target.targetChatId, `[TEST TRIGGER LANGSUNG]\n\n` + text);
-      return Response.json({
-        ok: sendRes.ok,
-        message: sendRes.ok ? `Notifikasi pengujian berhasil dikirim ke target ${target.targetChatId}!` : sendRes.description,
-      });
+      if (target.targetPlatform === 'dashboard' || String(target.targetChatId) === 'dashboard') {
+        const notif = {
+          id: `wn_test_${Date.now()}`,
+          jobId: target.id,
+          message: target.message,
+          scheduleRaw: target.scheduleRaw,
+          firedAt: Date.now(),
+          read: false,
+        };
+        await addWebNotification(env.AI_NEWS_KV, notif);
+        const webSessionKey = 'web:admin:1023972475';
+        const history = await getIsolatedChatHistory(env.AI_NEWS_KV, webSessionKey);
+        history.push({
+          role: 'assistant',
+          content: `[TEST TRIGGER]\n\n` + formatReminderNotification(target),
+          timestamp: Date.now(),
+        });
+        await saveIsolatedChatHistory(env.AI_NEWS_KV, webSessionKey, history);
+        return Response.json({ ok: true, message: 'Notifikasi tes berhasil dikirim ke Web Dashboard!' });
+      } else {
+        const text = target.type === 'cron' ? formatCronNotification(target) : formatReminderNotification(target);
+        const sendRes = await sendTelegramMessage(env.TELEGRAM_TOKEN, target.targetChatId, `[TEST TRIGGER LANGSUNG]\n\n` + text);
+        return Response.json({
+          ok: sendRes.ok,
+          message: sendRes.ok ? `Notifikasi pengujian berhasil dikirim ke target ${target.targetChatId}!` : sendRes.description,
+        });
+      }
+    }
+
+    // Web Dashboard Notifications API: Get unread & recent notifications
+    if (url.pathname === '/api/dashboard/notifications' && request.method === 'GET') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const notifications = await getWebNotifications(env.AI_NEWS_KV);
+      return Response.json({ ok: true, notifications });
+    }
+
+    // Web Dashboard Notifications API: Dismiss notification
+    if (url.pathname === '/api/dashboard/notifications/dismiss' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const body = ((await request.json().catch(() => ({}))) || {}) as { id?: string };
+      await dismissWebNotifications(env.AI_NEWS_KV, body.id);
+      return Response.json({ ok: true });
     }
 
     // ==========================================
@@ -1249,6 +1291,32 @@ function renderAdminDashboard(data: {
   </div>
 
   <main id="main-content" role="main">
+    <!-- WCAG 2.1 AAA Compliant Notification Alert Banner for Web Reminders -->
+    <div
+      id="webNotificationBanner"
+      role="alert"
+      aria-live="assertive"
+      style="display: none; background: #0369a1; border: 2px solid #38bdf8; color: #ffffff; padding: 1.25rem 1.5rem; border-radius: 12px; margin-bottom: 1.75rem; box-shadow: 0 8px 24px rgba(0,0,0,0.5);"
+    >
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <span style="font-size: 2.2rem;" aria-hidden="true">⏰</span>
+          <div>
+            <div style="font-weight: 800; font-size: 1.2rem; color: #ffffff;" id="bannerTitle">PENGINGAT (REMINDER)</div>
+            <div style="font-size: 1.05rem; color: #f0f9ff; margin-top: 0.25rem;" id="bannerMessage"></div>
+          </div>
+        </div>
+        <button
+          class="btn btn-primary"
+          onclick="dismissWebNotification()"
+          style="min-height: 44px; padding: 0.5rem 1.25rem; font-size: 0.95rem; font-weight: 700;"
+          aria-label="Tutup notifikasi pengingat ini"
+        >
+          ✓ Sudah Baca / Tutup
+        </button>
+      </div>
+    </div>
+
     <!-- ========================================== -->
     <!-- TAB 1: OVERVIEW & SCHEDULER                -->
     <!-- ========================================== -->
@@ -1337,7 +1405,7 @@ function renderAdminDashboard(data: {
           <span>💬 Live Web Chat dengan Technokers AI</span>
           <button class="btn btn-secondary" style="min-height: 40px; padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="clearWebChat()">🧹 Bersihkan Chat</button>
         </h2>
-        <p>Anda terhubung langsung dengan AI Bot melalui Dashboard Web (Konteks Terisolasi Khusus Administrator <b>@alfian04121</b>). Tanyakan apa saja atau minta hubungkan konektor (misal: <i>"sambungin ke blogger dong"</i> atau <i>"sambungin ke google dong"</i>).</p>
+        <p>Anda terhubung langsung dengan AI Bot melalui Dashboard Web (Konteks Terisolasi Khusus Administrator <b>@alfian04121</b>). Bot mengetahui platform chat Anda! Anda bisa meminta pengingat cerdas seperti: <i>"ingetin buat makan 3 menit lagi ya, ingetinnya disini aja"</i> atau <i>"ingetin buat makan 3 menit lagi ya, di telegram aja"</i>.</p>
 
         <div id="chatBox" class="chat-box" role="log" aria-live="polite" aria-label="Riwayat percakapan">
           ${
@@ -1491,7 +1559,8 @@ function renderAdminDashboard(data: {
             <div>
               <label for="newJobTarget">Target Pengiriman:</label>
               <select id="newJobTarget">
-                <option value="1023972475">Chat Pribadi Admin (@alfian04121)</option>
+                <option value="dashboard">Web Dashboard ini (Di sini)</option>
+                <option value="1023972475">Chat Pribadi Admin Telegram (@alfian04121)</option>
                 <option value="${data.channelId}">Channel Resmi (${data.channelId})</option>
               </select>
             </div>
@@ -1530,7 +1599,7 @@ function renderAdminDashboard(data: {
                     <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-bottom: 0.35rem;">${escapeHtml(j.message)}</div>
                     <div style="font-size: 0.9rem; color: #cbd5e1;">
                       🕒 Jadwal: <b>${escapeHtml(j.scheduleRaw || '')}</b> ${j.cronExpression ? `(<code>${j.cronExpression}</code>)` : ''} &bull; 
-                      🎯 Target: <b>${String(j.targetChatId) === String(data.channelId) ? 'Channel ' + data.channelId : 'Private Chat (' + j.targetChatId + ')'}</b> &bull;
+                      🎯 Target: <b>${j.targetPlatform === 'dashboard' || String(j.targetChatId) === 'dashboard' ? 'Web Dashboard (Di sini)' : (String(j.targetChatId) === String(data.channelId) ? 'Channel ' + data.channelId : 'Telegram (' + j.targetChatId + ')')}</b> &bull;
                       📊 Eksekusi: <b>${j.runCount || 0}x</b>
                     </div>
                   </div>
@@ -1830,6 +1899,71 @@ function renderAdminDashboard(data: {
       const data = await res.json();
       alert(data.message || (res.ok ? 'Notifikasi tes berhasil dikirim!' : 'Gagal mengirim'));
     }
+
+    // Web Dashboard Notification Polling & Chime (WCAG 2.1 AAA Compliant)
+    let currentActiveNotifId = null;
+
+    function playNotificationChime() {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.6);
+      } catch (e) {}
+    }
+
+    async function checkWebNotifications() {
+      try {
+        const res = await fetch('/api/dashboard/notifications');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.notifications)) {
+          const unread = data.notifications.filter(n => !n.read);
+          const banner = document.getElementById('webNotificationBanner');
+          if (unread.length > 0) {
+            const latest = unread[0];
+            if (currentActiveNotifId !== latest.id) {
+              currentActiveNotifId = latest.id;
+              const titleEl = document.getElementById('bannerTitle');
+              const msgEl = document.getElementById('bannerMessage');
+              if (titleEl) titleEl.textContent = '⏰ PENGINGAT (REMINDER): ' + (latest.scheduleRaw || 'Jadwal Tiba');
+              if (msgEl) msgEl.innerHTML = '<b>Pesan:</b> ' + escapeHtml(latest.message);
+              if (banner) banner.style.display = 'block';
+              playNotificationChime();
+            }
+          } else {
+            if (banner && !currentActiveNotifId) banner.style.display = 'none';
+          }
+        }
+      } catch (e) {}
+    }
+
+    async function dismissWebNotification() {
+      const banner = document.getElementById('webNotificationBanner');
+      if (banner) banner.style.display = 'none';
+      const idToDismiss = currentActiveNotifId;
+      currentActiveNotifId = null;
+      try {
+        await fetch('/api/dashboard/notifications/dismiss', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: idToDismiss })
+        });
+      } catch (e) {}
+    }
+
+    setInterval(checkWebNotifications, 4000);
+    checkWebNotifications();
   </script>
 </body>
 </html>`;

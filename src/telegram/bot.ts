@@ -309,6 +309,7 @@ export async function handleTelegramUpdate(
       id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       type: 'reminder',
       message: parsed.message,
+      targetPlatform: 'telegram',
       targetChatId: chatId,
       threadId: threadId,
       creatorId: userId,
@@ -369,6 +370,7 @@ export async function handleTelegramUpdate(
       id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       type: 'cron',
       message: parsed.message,
+      targetPlatform: 'telegram',
       targetChatId: targetChat,
       threadId: toChannel ? undefined : threadId,
       creatorId: userId,
@@ -758,7 +760,8 @@ export async function handleTelegramUpdate(
     userId,
     userName,
     chatId,
-    userIsAdmin
+    userIsAdmin,
+    'telegram'
   );
   if (reminderIntent.handled && reminderIntent.replyText) {
     await sendTelegramMessage(token, chatId, reminderIntent.replyText, {
