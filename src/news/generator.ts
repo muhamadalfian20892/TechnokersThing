@@ -1,7 +1,11 @@
 import { RawNewsItem } from './types';
 
-function formatDateWIB(): string {
-  // Format current date into Indonesian WIB (UTC+7)
+export function getWibInfo(): {
+  dateStr: string;
+  isFriday: boolean;
+  dayName: string;
+  formattedDate: string;
+} {
   const now = new Date();
   const wibTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
   const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -10,67 +14,100 @@ function formatDateWIB(): string {
     'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
   ];
 
-  const dayName = days[wibTime.getUTCDay()];
+  const dayOfWeek = wibTime.getUTCDay();
+  const dayName = days[dayOfWeek];
   const date = wibTime.getUTCDate();
   const monthName = months[wibTime.getUTCMonth()];
   const year = wibTime.getUTCFullYear();
 
-  return `${dayName}, ${date} ${monthName} ${year}`;
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const dateStr = `${year}-${pad(wibTime.getUTCMonth() + 1)}-${pad(date)}`;
+  const formattedDate = `${dayName}, ${date} ${monthName} ${year}`;
+
+  return {
+    dateStr,
+    isFriday: dayOfWeek === 5,
+    dayName,
+    formattedDate,
+  };
 }
 
 export async function generateDailyNewsDigest(
   ai: Ai,
-  newsItems: RawNewsItem[]
+  newsItems: RawNewsItem[],
+  forceRecap: boolean = false
 ): Promise<string> {
-  const dateStr = formatDateWIB();
+  const { isFriday, formattedDate } = getWibInfo();
+  const isWeeklyRecap = isFriday || forceRecap;
 
   if (newsItems.length === 0) {
-    return `🤖 <b>AI DAILY DIGEST | @aicomindo</b>\n📅 <i>${dateStr}</i>\n\nBelum ada berita baru yang signifikan hari ini atau semua pembaruan telah diposting sebelumnya. Tetap ikuti @aicomindo untuk update seputar AI terkini!\n\n#AINews #aicomindo`;
+    return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada pergerakan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi sebelumnya. Pantau terus @aicomindo untuk update selanjutnya!\n\nLink Channel: t.me/aicomindo\n#AIUpdate #aicomindo`;
   }
 
-  // Pick top 3 to 5 most relevant news items
-  const selected = newsItems.slice(0, 5);
+  // On Friday (Weekly Recap), select 7-10 stories; on regular days, select 4-5 stories
+  const targetCount = isWeeklyRecap ? Math.min(10, Math.max(5, newsItems.length)) : Math.min(5, newsItems.length);
+  const selected = newsItems.slice(0, targetCount);
 
   const newsSummaryList = selected
     .map(
       (item, idx) =>
-        `${idx + 1}. Judul: "${item.title}"\nSumber: ${item.source}\nLink: ${item.url}\nDetail Singkat: ${item.snippet || 'None'}`
+        `Item ${idx + 1}:
+Judul: ${item.title}
+Sumber: ${item.source}
+Link: ${item.url}
+Snippet/Info: ${item.snippet || 'None'}`
     )
     .join('\n\n');
 
-  const systemPrompt = `Kamu adalah AI Tech Journalist dan Lead Editor untuk komunitas "AI Community News Indonesia" (@aicomindo).
-Tugasmu adalah merangkum berita-berita AI global terbaru menjadi satu postingan ringkasan harian (AI Daily Digest) berbahasa Indonesia yang:
-1. Sangat informatif, akurat, dan mudah dipahami oleh pembaca umum maupun developer/praktisi AI.
-2. Menggunakan gaya bahasa profesional, santai, dan modern (tidak kaku seperti koran lama).
-3. Gunakan tag format HTML Telegram:
-   - <b>Teks tebal</b> untuk judul atau poin penting
-   - <i>Teks miring</i> untuk istilah asing atau catatan
-   - <a href="URL">Teks Link</a> untuk tautan sumber
-   JANGAN gunakan format Markdown seperti ** atau * atau _, gunakan tag HTML Telegram resmi (b, i, a).
-4. Struktur postingan:
-   - Header: ⚡ <b>AI DAILY DIGEST | @aicomindo</b>
-   - Subheader: 📅 <i>${dateStr}</i>
-   - Intro singkat yang menarik (1-2 kalimat)
-   - 3-5 Poin Berita Utama. Setiap berita harus memiliki:
-     🔹 <b>[Judul Berita Bahasa Indonesia Menarik]</b>
-     Penjelasan inti berita dan apa dampaknya bagi industri / pengguna biasa (2-3 kalimat jelas).
-     🔗 <a href="URL_SUMBER">Baca Selengkapnya</a>
-   - 💡 <b>AI Takeaway / Insight:</b> Catatan ringkas tentang arah perkembangan AI hari ini.
-   - Penutup ajakan gabung diskusi di channel @aicomindo
-   - Hashtag: #AINews #KecerdasanBuatan #AITrend #TechUpdate #aicomindo
+  const editionType = isWeeklyRecap ? 'WEEKLY TECH & AI RECAP (EDISI JUMAT)' : 'DAILY AI UPDATE';
 
-PENTING: Jangan buat link palsu. Gunakan URL asli yang diberikan di daftar berita.`;
+  const systemPrompt = `Kamu adalah Lead Tech Content Creator dan AI Journalist untuk channel Telegram "@aicomindo" (AI Community News Indonesia).
+Kamu memiliki gaya penulisan yang SANGAT MENARIK, BOLD, BERBOBOT, DILENGKAPI FAKTA & ANGKA, serta menggunakan bahasa Indonesia gaul-profesional ala tech insider Indonesia (seperti postingan viral di LinkedIn/Twitter tech).
 
-  const userPrompt = `Berikut adalah berita-berita AI terbaru hari ini:\n\n${newsSummaryList}\n\nTuliskan AI Daily Digest dalam format Telegram HTML sekarang:`;
+TUGASMU:
+Tulis postingan ${editionType} berdasarkan bahan berita yang disediakan.
+
+GAYA PENULISAN WAJIB MENGIKUTI CONTOH BERIKUT SECARA PERSIS:
+---
+[Headline Bombastis/Viral yang Mewakili Berita Terbesar dengan 2-3 Emoji] 🛡️🤝💰
+
+${isWeeklyRecap ? 'Seminggu terakhir ini dunia tech bener-bener gak kasih kita napas. Buat kalian yang gak mau pusing ketinggalan info, ini rangkuman gebrakan paling gila yang bakal ngerubah masa depan ekosistem digital kita. Langsung sikat:' : 'Perkembangan AI hari ini geraknya kenceng banget! Buat kalian yang mau tetep relevan dan gak mau FOMO, ini update paling gila hari ini yang wajib kalian tahu. Langsung sikat:'}
+
+1. [Judul Poin Berita Singkat Padat Menohok!] [Emoji]
+[Tulis 2-3 kalimat substansial dan mendalam! Jangan cuma sebut link. Jelaskan SIAPA, APA AKSI NYA, MENGAPA MEREKA MELAKUKANNYA, ANGKA/NILAINYA jika ada, dan APA DAMPAKNYA bagi ekosistem/pengguna. Sertakan link sumber di akhir kalimat: (Sumber: <a href="LINK">NamaSumber</a>)]
+
+2. [Judul Poin Berita 2] [Emoji]
+[Penjelasan mendalam 2-3 kalimat berisi fakta nyata dan implikasi...]
+
+... [Lanjutkan hingga semua ${selected.length} berita]
+
+Pandangan Saya:
+[1-2 kalimat opini/analisis tajam tentang tren besar di balik berita-berita ini, misalnya pergeseran ke AI Agentic, perang chip hardware, privasi data, dll.]
+
+Nah, dari berita di atas, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih opini kalian di bawah! 🚀🧪
+
+Link Channel: t.me/aicomindo
+#TechRecap #AIUpdate #KecerdasanBuatan #OpenAI #Google #Meta #FutureOfWork #aicomindo
+---
+
+ATURAN FORMATTING SANGAT PENTING:
+1. Gunakan tag format HTML Telegram:
+   - <b>Teks tebal</b> untuk headline dan judul nomor berita
+   - <i>Teks miring</i> jika diperlukan
+   - <a href="URL">Teks Link</a> untuk tautan sumber asli
+   JANGAN gunakan markdown syntax asterisks (** atau * atau #).
+2. BERITA HARUS BENAR-BENAR DICERITAKAN (BERBOBOT)! Jangan hanya link pendek tanpa penjelasan. Pembaca harus paham beritanya langsung dari membaca teksmu tanpa harus buka link.
+3. Jangan halusinasi link, gunakan URL asli yang diberikan di data.`;
+
+  const userPrompt = `Berikut adalah ${selected.length} berita AI ${isWeeklyRecap ? 'untuk Weekly Recap' : 'hari ini'}:\n\n${newsSummaryList}\n\nTuliskan postingan lengkap sekarang sesuai format dan gaya penulisan di atas:`;
 
   try {
-    // Attempt with Llama 3.3 70B
     const response = (await ai.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: 1500,
+      max_tokens: 2200,
       temperature: 0.7,
     })) as { response?: string };
 
@@ -85,7 +122,7 @@ PENTING: Jangan buat link palsu. Gunakan URL asli yang diberikan di daftar berit
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        max_tokens: 1500,
+        max_tokens: 1800,
         temperature: 0.7,
       })) as { response?: string };
 
@@ -97,23 +134,31 @@ PENTING: Jangan buat link palsu. Gunakan URL asli yang diberikan di daftar berit
     }
   }
 
-  // Graceful fallback template if AI model call fails
-  const fallbackDigest = [
-    `⚡ <b>AI DAILY DIGEST | @aicomindo</b>`,
-    `📅 <i>${dateStr}</i>`,
+  // Manual fallback structure if AI fails
+  const headline = isWeeklyRecap
+    ? `🔥 <b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Gila Minggu Ini!</b>`
+    : `⚡ <b>AI DAILY UPDATE: Terobosan Terpanas Hari Ini!</b>`;
+
+  const intro = isWeeklyRecap
+    ? `Seminggu terakhir ini dunia tech bener-bener gak kasih kita napas! Ini rangkuman berita penting yang bakal ngerubah masa depan digital kita:`
+    : `Dunia AI bergerak super cepat hari ini. Ini rangkuman perkembangan penting yang wajib kamu pantau:`;
+
+  return [
+    headline,
     ``,
-    `Berikut adalah ringkasan perkembangan AI terbaru hari ini:`,
+    intro,
     ``,
     ...selected.map(
-      (item) =>
-        `🔹 <b>${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || '')}\n🔗 <a href="${item.url}">Baca di ${escapeHtml(item.source)}</a>\n`
+      (item, idx) =>
+        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} (<a href="${item.url}">Baca di ${escapeHtml(item.source)}</a>)\n`
     ),
-    `💡 Ikuti terus update dunia AI setiap hari jam 18:00 WIB di @aicomindo!`,
+    `<b>Pandangan Saya:</b>\nPerkembangan AI kian nyata beralih dari sekadar model obrolan menjadi agen otomatis dan integrasi mendalam ke kehidupan sehari-hari.`,
     ``,
-    `#AINews #KecerdasanBuatan #aicomindo`,
+    `Nah, mana menurut kalian yang paling berdampak? Yuk diskusi! 🚀`,
+    ``,
+    `Link Channel: t.me/aicomindo`,
+    `#TechRecap #AIUpdate #aicomindo`,
   ].join('\n');
-
-  return fallbackDigest;
 }
 
 function escapeHtml(text: string): string {

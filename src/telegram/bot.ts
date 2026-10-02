@@ -2,11 +2,14 @@ import { sendTelegramMessage, sendChatAction } from './api';
 import { fetchLatestAINews } from '../news/fetcher';
 import {
   filterUnpostedNews,
-  recordPostedNews,
   getRecentPostedHistory,
   getLastDigestStats,
+  isPostingPaused,
+  setPostingPaused,
+  hasPostedToday,
 } from '../news/memory';
-import { generateDailyNewsDigest } from '../news/generator';
+import { generateDailyNewsDigest, getWibInfo } from '../news/generator';
+import { executeDailyNewsPosting } from '../index';
 
 export interface TelegramUpdate {
   update_id: number;
@@ -41,86 +44,189 @@ export async function handleTelegramUpdate(
   const userName = msg.from?.first_name || 'Teman';
   const token = env.TELEGRAM_TOKEN;
 
-  // Handle Commands
+  // 1. Admin Commands: Stop / Pause Posting
+  if (text === '/stop_posting' || text === '/pause' || text === '/stop') {
+    await setPostingPaused(env.AI_NEWS_KV, true);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🛑 <b>Posting Otomatis Diberhentikan (PAUSED)!</b>\n\n` +
+        `Jadwal posting otomatis jam 18:00 WIB ke channel ${env.CHANNEL_ID} sekarang dalam status <b>PAUSED</b>.\n` +
+        `Bot tidak akan mengirimkan postingan apapun sampai Anda mengaktifkannya kembali.\n\n` +
+        `Ketik /resume_posting atau /resume untuk mengaktifkan kembali.`
+    );
+    return;
+  }
+
+  // 2. Admin Commands: Resume Posting
+  if (text === '/resume_posting' || text === '/resume' || text === '/start_posting') {
+    await setPostingPaused(env.AI_NEWS_KV, false);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🟢 <b>Posting Otomatis Diaktifkan Kembali (ACTIVE)!</b>\n\n` +
+        `Bot akan kembali berjalan normal dan memposting digest berita ke channel ${env.CHANNEL_ID} setiap hari pukul <b>18:00 WIB</b> (1x sehari).`
+    );
+    return;
+  }
+
+  // 3. Admin Command: Force Post Now
+  if (text === '/post_now' || text === '/broadcast_now') {
+    await sendChatAction(token, chatId, 'typing');
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `⏳ <i>Sedang memproses dan mengirim postingan berita langsung ke channel ${env.CHANNEL_ID}...</i>`
+    );
+
+    const result = await executeDailyNewsPosting(env, true);
+    if (result.success) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `✅ <b>Berhasil Terkirim!</b>\n\n` +
+          `${result.message}\n` +
+          `Jumlah berita terangkum: ${result.postedCount} berita.`
+      );
+    } else {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ <b>Gagal Posting:</b>\n${result.message}`
+      );
+    }
+    return;
+  }
+
+  // 4. Admin Command: Preview Digest
+  if (text === '/preview') {
+    await sendChatAction(token, chatId, 'typing');
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🔍 <i>Sedang menyusun pratinjau berita AI (sesuai format hari ini)...</i>`
+    );
+
+    try {
+      const { isFriday } = getWibInfo();
+      const candidates = await fetchLatestAINews();
+      const unposted = await filterUnpostedNews(env.AI_NEWS_KV, candidates);
+      const targetCount = isFriday ? 10 : 5;
+      const itemsToPost = unposted.length > 0 ? unposted.slice(0, targetCount) : candidates.slice(0, targetCount);
+      const digest = await generateDailyNewsDigest(env.AI, itemsToPost, isFriday);
+
+      await sendTelegramMessage(token, chatId, digest);
+    } catch (err) {
+      console.error('Error generating preview:', err);
+      await sendTelegramMessage(token, chatId, `⚠️ Gagal menghasilkan preview: ${String(err)}`);
+    }
+    return;
+  }
+
+  // 5. User Command: /start
   if (text.startsWith('/start')) {
     await sendTelegramMessage(
       token,
       chatId,
       `Halo, <b>${userName}</b>! 👋\n\n` +
         `Selamat datang di <b>Technokers AI Bot</b>! 🤖\n` +
-        `Saya adalah asisten AI yang bertugas mengkurasi berita & tren AI global terkini setiap hari untuk komunitas <a href="https://t.me/aicomindo">@aicomindo</a>.\n\n` +
-        `✨ <b>Fitur Utama:</b>\n` +
-        `• <b>Update Berita Harian:</b> Diposting otomatis setiap hari jam <b>18:00 WIB</b> di channel @aicomindo.\n` +
-        `• <b>Sistem Anti-Duplikasi:</b> Saya mengingat berita yang sudah diposting sehingga kamu selalu mendapatkan topik baru & segar.\n` +
-        `• <b>Tanya Jawab AI Interaktif:</b> Tanyakan apa saja tentang kecerdasan buatan, model LLM, prompt engineering, atau coding langsung di chat ini!\n\n` +
-        `🚀 <b>Daftar Perintah:</b>\n` +
-        `• /news - Baca ringkasan berita AI terkini sekarang juga\n` +
-        `• /status - Cek status bot, memory KV, dan jadwal rilis\n` +
-        `• /help - Panduan penggunaan bot\n\n` +
-        `<i>Silakan ketik pertanyaan Anda atau pilih perintah di atas!</i>`
+        `Saya mengkurasi berita & tren AI global terkini secara otomatis untuk komunitas <a href="https://t.me/aicomindo">@aicomindo</a>.\n\n` +
+        `✨ <b>Aturan Posting:</b>\n` +
+        `• <b>Jadwal:</b> Tepat 1x sehari pukul <b>18:00 WIB</b>.\n` +
+        `• <b>Hari Jumat:</b> <i>Weekly Tech & AI Recap</i> (7-10 gebrakan paling gila dalam seminggu).\n` +
+        `• <b>Hari Lain:</b> <i>Daily AI Update</i> (3-5 terobosan terpanas hari ini).\n` +
+        `• <b>Anti-Spam & Anti-Duplikasi:</b> Terproteksi Cloudflare KV agar berita tidak pernah berulang.\n\n` +
+        `🛠️ <b>Perintah Kontrol:</b>\n` +
+        `• /news - Baca ringkasan berita AI terkini sekarang\n` +
+        `• /preview - Preview draf postingan hari ini\n` +
+        `• /status - Cek status bot, memory KV, & jadwal\n` +
+        `• /stop_posting - 🛑 Hentikan posting otomatis (Admin)\n` +
+        `• /resume_posting - 🟢 Aktifkan kembali posting (Admin)\n` +
+        `• /post_now - 🚀 Kirim postingan sekarang ke channel (Admin)\n` +
+        `• /help - Panduan lengkap\n\n` +
+        `<i>Kamu juga bisa langsung tanya apa saja seputar AI di chat ini!</i>`
     );
     return;
   }
 
+  // 6. User Command: /help
   if (text.startsWith('/help')) {
     await sendTelegramMessage(
       token,
       chatId,
-      `📖 <b>Panduan Penggunaan Technokers AI Bot</b>\n\n` +
-        `• <b>Chat Bebas:</b> Kamu bisa langsung mengirim pertanyaan apapun seperti <i>"Apa perbedaan Llama 3 dan GPT-4o?"</i> atau <i>"Bagaimana cara kerja RAG?"</i>, dan bot akan langsung menjawabnya.\n` +
-        `• <b>/news:</b> Mengambil berita AI terbaru dari berbagai sumber global dan merangkumnya secara instan untukmu.\n` +
-        `• <b>/status:</b> Memeriksa status kesehatan bot, total memori KV anti-duplikasi, dan riwayat posting.\n\n` +
-        `📢 Jangan lupa gabung ke channel resmi kami di <a href="https://t.me/aicomindo">@aicomindo</a>!`
+      `📖 <b>Panduan Technokers AI Bot</b>\n\n` +
+        `• <b>Tanya AI:</b> Kirim pesan apapun seperti <i>"Jelaskan apa itu Agentic AI"</i> atau <i>"Rekomendasi model LLM coding"</i>.\n` +
+        `• <b>/news:</b> Mengambil berita terkini on-demand.\n` +
+        `• <b>/preview:</b> Melihat pratinjau berita yang siap dirilis.\n` +
+        `• <b>/status:</b> Status sistem & kunci harian.\n\n` +
+        `🛡️ <b>Kontrol Admin (Anti-Spam):</b>\n` +
+        `• /stop_posting : Menghentikan scheduler posting harian.\n` +
+        `• /resume_posting : Mengaktifkan kembali scheduler.\n` +
+        `• /post_now : Memaksa pengiriman postingan langsung ke channel.\n\n` +
+        `📢 Channel Resmi: <a href="https://t.me/aicomindo">@aicomindo</a>`
     );
     return;
   }
 
+  // 7. System Status: /status
   if (text.startsWith('/status')) {
-    const history = await getRecentPostedHistory(env.AI_NEWS_KV);
-    const lastStats = await getLastDigestStats(env.AI_NEWS_KV);
+    const { dateStr, isFriday, formattedDate } = getWibInfo();
+    const [history, lastStats, paused, postedToday] = await Promise.all([
+      getRecentPostedHistory(env.AI_NEWS_KV),
+      getLastDigestStats(env.AI_NEWS_KV),
+      isPostingPaused(env.AI_NEWS_KV),
+      hasPostedToday(env.AI_NEWS_KV, dateStr),
+    ]);
 
-    const lastPostedText = lastStats
-      ? `${new Date(lastStats.timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB (${lastStats.count} berita)`
-      : 'Belum ada catatan postingan';
+    const postStatus = paused ? '🛑 PAUSED (Dinonaktifkan Admin)' : '🟢 ACTIVE (Siap posting)';
+    const todayStatus = postedToday ? '✅ Sudah diposting' : '⏳ Menunggu jam 18:00 WIB';
 
     await sendTelegramMessage(
       token,
       chatId,
       `📊 <b>Status Sistem Technokers AI Bot</b>\n\n` +
-        `🟢 <b>Status:</b> Online & Siap\n` +
-        `☁️ <b>Platform:</b> Cloudflare Workers & Workers AI\n` +
-        `📢 <b>Channel Target:</b> ${env.CHANNEL_ID}\n` +
-        `⏰ <b>Jadwal Posting Otomatis:</b> Setiap 18:00 WIB (11:00 UTC)\n` +
-        `🧠 <b>Jumlah Berita di Memori KV:</b> ${history.length} item tersimpan\n` +
-        `🕒 <b>Digest Terakhir:</b> ${lastPostedText}\n`
+        `⚙️ <b>Status Scheduler:</b> ${postStatus}\n` +
+        `📅 <b>Waktu Saat Ini:</b> ${formattedDate}\n` +
+        `📑 <b>Format Hari Ini:</b> ${isFriday ? 'Weekly Tech Recap (Jumat)' : 'Daily AI Update'}\n` +
+        `🔒 <b>Status Hari Ini:</b> ${todayStatus}\n` +
+        `📢 <b>Channel:</b> ${env.CHANNEL_ID}\n` +
+        `⏰ <b>Jadwal:</b> 1x Sehari (Pukul 18:00 WIB)\n` +
+        `🧠 <b>Riwayat Berita di KV:</b> ${history.length} item tersimpan\n` +
+        `🕒 <b>Post Terakhir:</b> ${lastStats ? `${new Date(lastStats.timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB` : '-'}`
     );
     return;
   }
 
+  // 8. On-demand News: /news
   if (text.startsWith('/news')) {
     await sendChatAction(token, chatId, 'typing');
     await sendTelegramMessage(
       token,
       chatId,
-      `🔍 <i>Sedang mengumpulkan dan merangkum berita AI terbaru untukmu... Mohon tunggu sebentar.</i>`
+      `🔍 <i>Sedang mengumpulkan berita AI terbaru dan menyusun analisanya untukmu... Mohon tunggu sebentar.</i>`
     );
 
     try {
+      const { isFriday } = getWibInfo();
       const candidates = await fetchLatestAINews();
-      const digest = await generateDailyNewsDigest(env.AI, candidates);
+      const unposted = await filterUnpostedNews(env.AI_NEWS_KV, candidates);
+      const targetCount = isFriday ? 10 : 5;
+      const itemsToPost = unposted.length > 0 ? unposted.slice(0, targetCount) : candidates.slice(0, targetCount);
+      const digest = await generateDailyNewsDigest(env.AI, itemsToPost, isFriday);
+
       await sendTelegramMessage(token, chatId, digest);
     } catch (err) {
-      console.error('Error generating on-demand news:', err);
+      console.error('Error in /news command:', err);
       await sendTelegramMessage(
         token,
         chatId,
-        `⚠️ Maaf, terjadi kesalahan saat mengambil berita terbaru. Silakan coba lagi nanti.`
+        `⚠️ Maaf, ada kendala saat menyusun berita. Silakan coba kembali nanti.`
       );
     }
     return;
   }
 
-  // Interactive AI Conversation for free-form queries
+  // 9. Interactive AI Conversation for free-form queries
   await sendChatAction(token, chatId, 'typing');
 
   try {
@@ -128,7 +234,7 @@ export async function handleTelegramUpdate(
 Panduan Menjawab:
 1. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, dan edukatif.
 2. Format jawaban menggunakan tag HTML Telegram yang valid (<b>tebal</b>, <i>miring</i>, <code>kode</code>) jika diperlukan. Hindari markdown syntax seperti ** atau ##.
-3. Jawab secara ringkas, to the point, dan tidak bertele-tele agar nyaman dibaca di layar smartphone Telegram.
+3. Jawab secara ringkas, to the point, dan informatif.
 4. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.`;
 
     const aiRes = (await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
@@ -149,14 +255,12 @@ Panduan Menjawab:
     });
   } catch (err) {
     console.error('Error in interactive AI chat:', err);
-    // Fallback to Llama 3.1 8B
     try {
       const fallbackRes = (await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
         messages: [
           {
             role: 'system',
-            content:
-              'Kamu adalah AI assistant ramah berbahasa Indonesia dari @aicomindo. Jawab singkat dan jelas.',
+            content: 'Kamu adalah AI assistant ramah dari @aicomindo. Jawab singkat dan jelas dalam bahasa Indonesia.',
           },
           { role: 'user', content: text },
         ],
@@ -169,7 +273,7 @@ Panduan Menjawab:
         fallbackRes.response?.trim() || 'Ada kendala saat memproses jawaban.',
         { replyToMessageId: msg.message_id }
       );
-    } catch (fallbackErr) {
+    } catch {
       await sendTelegramMessage(
         token,
         chatId,

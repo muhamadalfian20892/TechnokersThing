@@ -15,13 +15,46 @@ export async function sendTelegramMessage(
     replyToMessageId?: number;
   }
 ): Promise<{ ok: boolean; messageId?: number; description?: string }> {
+  // If text is within Telegram's safe limit, send directly
+  if (text.length <= 4000) {
+    return sendSingleMessage(token, chatId, text, options);
+  }
+
+  // Split into chunks if text exceeds limit (e.g. detailed 10-item Weekly Recap)
+  const chunks = splitMessageIntoChunks(text, 3900);
+  let lastResult: { ok: boolean; messageId?: number; description?: string } = {
+    ok: true,
+  };
+
+  for (const chunk of chunks) {
+    lastResult = await sendSingleMessage(token, chatId, chunk, options);
+    if (!lastResult.ok) {
+      break;
+    }
+    // Small delay between chunks
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  return lastResult;
+}
+
+async function sendSingleMessage(
+  token: string,
+  chatId: string | number,
+  text: string,
+  options?: {
+    parseMode?: 'HTML' | 'Markdown' | 'MarkdownV2';
+    disableWebPagePreview?: boolean;
+    replyToMessageId?: number;
+  }
+): Promise<{ ok: boolean; messageId?: number; description?: string }> {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
 
   const payload: Record<string, unknown> = {
     chat_id: chatId,
     text,
     parse_mode: options?.parseMode ?? 'HTML',
-    disable_web_page_preview: options?.disableWebPagePreview ?? false,
+    disable_web_page_preview: options?.disableWebPagePreview ?? true,
   };
 
   if (options?.replyToMessageId) {
@@ -39,15 +72,16 @@ export async function sendTelegramMessage(
 
     if (!data.ok) {
       console.error('Failed to send Telegram message:', data.description);
-      // Fallback: If parse_mode fails due to unclosed tags, retry once without parse_mode
+      // Fallback: If parse_mode fails due to unclosed tags, retry once with plain text
       if (options?.parseMode && data.description?.includes('can\'t parse entities')) {
-        console.warn('Retrying message without HTML parsing formatting...');
+        console.warn('Retrying message without HTML parsing...');
         const plainRes = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: chatId,
             text: stripBasicHtml(text),
+            disable_web_page_preview: true,
           }),
         });
         const plainData = (await plainRes.json()) as TelegramResponse<{ message_id: number }>;
@@ -68,6 +102,45 @@ export async function sendTelegramMessage(
     console.error('Network error sending Telegram message:', err);
     return { ok: false, description: String(err) };
   }
+}
+
+function splitMessageIntoChunks(text: string, maxChunkLength: number): string[] {
+  const chunks: string[] = [];
+  const paragraphs = text.split('\n\n');
+  let currentChunk = '';
+
+  for (const para of paragraphs) {
+    if ((currentChunk + '\n\n' + para).length <= maxChunkLength) {
+      currentChunk = currentChunk ? currentChunk + '\n\n' + para : para;
+    } else {
+      if (currentChunk) {
+        chunks.push(currentChunk);
+      }
+      if (para.length > maxChunkLength) {
+        // If single paragraph is too large, split by lines
+        const lines = para.split('\n');
+        let lineChunk = '';
+        for (const line of lines) {
+          if ((lineChunk + '\n' + line).length <= maxChunkLength) {
+            lineChunk = lineChunk ? lineChunk + '\n' + line : line;
+          } else {
+            if (lineChunk) chunks.push(lineChunk);
+            lineChunk = line;
+          }
+        }
+        if (lineChunk) currentChunk = lineChunk;
+        else currentChunk = '';
+      } else {
+        currentChunk = para;
+      }
+    }
+  }
+
+  if (currentChunk) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
 }
 
 export async function sendChatAction(

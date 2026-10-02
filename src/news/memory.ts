@@ -1,6 +1,6 @@
 import { RawNewsItem, PostedNewsRecord } from './types';
 
-// Simple fast SHA-256 / hash function for Web Crypto API supported in Cloudflare Workers
+// Fast SHA-256 for Web Crypto API supported in Cloudflare Workers
 async function hashText(input: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(input);
@@ -21,14 +21,36 @@ function normalizeTitle(title: string): string {
 function normalizeUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    // Remove tracking query params like utm_*, ref, etc.
     return `${parsed.origin}${parsed.pathname}`.toLowerCase();
   } catch {
     return url.toLowerCase().split('?')[0];
   }
 }
 
-// Check if a specific news item has already been posted
+// 1. Admin Kill Switch (Pause / Resume Posting)
+export async function isPostingPaused(kv: KVNamespace): Promise<boolean> {
+  const val = await kv.get('config:posting_paused');
+  return val === 'true';
+}
+
+export async function setPostingPaused(kv: KVNamespace, paused: boolean): Promise<void> {
+  await kv.put('config:posting_paused', paused ? 'true' : 'false');
+}
+
+// 2. Strict Single Post Per Day Lock (YYYY-MM-DD WIB)
+export async function hasPostedToday(kv: KVNamespace, wibDateStr: string): Promise<boolean> {
+  const key = `daily_posted:${wibDateStr}`;
+  const val = await kv.get(key);
+  return val !== null;
+}
+
+export async function markPostedToday(kv: KVNamespace, wibDateStr: string): Promise<void> {
+  const key = `daily_posted:${wibDateStr}`;
+  // Expire after 3 days to keep KV clean
+  await kv.put(key, new Date().toISOString(), { expirationTtl: 3 * 24 * 60 * 60 });
+}
+
+// 3. Deduplication Check for individual news items
 export async function isNewsAlreadyPosted(kv: KVNamespace, item: RawNewsItem): Promise<boolean> {
   const normUrl = normalizeUrl(item.url);
   const urlHash = await hashText(normUrl);
@@ -45,7 +67,6 @@ export async function isNewsAlreadyPosted(kv: KVNamespace, item: RawNewsItem): P
   return existingTitle !== null;
 }
 
-// Filter a list of candidates to keep only unposted items
 export async function filterUnpostedNews(kv: KVNamespace, items: RawNewsItem[]): Promise<RawNewsItem[]> {
   const unposted: RawNewsItem[] = [];
 
@@ -59,15 +80,13 @@ export async function filterUnpostedNews(kv: KVNamespace, items: RawNewsItem[]):
   return unposted;
 }
 
-// Record newly posted items in KV to prevent future duplicates
 export async function recordPostedNews(
   kv: KVNamespace,
   items: RawNewsItem[],
   headline: string = ''
 ): Promise<void> {
   const now = new Date().toISOString();
-  // 60 days expiration TTL for individual keys
-  const expirationTtl = 60 * 24 * 60 * 60;
+  const expirationTtl = 60 * 24 * 60 * 60; // 60 days
 
   for (const item of items) {
     const normUrl = normalizeUrl(item.url);
@@ -79,7 +98,7 @@ export async function recordPostedNews(
     await kv.put(`seen:title:${titleHash}`, now, { expirationTtl });
   }
 
-  // Update rolling history of last 50 posted stories
+  // Update rolling history of last 100 posted stories
   const historyKey = 'history:posted';
   const existingHistoryJson = await kv.get(historyKey);
   let history: PostedNewsRecord[] = [];
@@ -99,10 +118,9 @@ export async function recordPostedNews(
     postedAt: now,
   }));
 
-  const updatedHistory = [...newRecords, ...history].slice(0, 60);
+  const updatedHistory = [...newRecords, ...history].slice(0, 100);
   await kv.put(historyKey, JSON.stringify(updatedHistory));
 
-  // Save metadata of last digest
   await kv.put(
     'stats:last_digest',
     JSON.stringify({
@@ -113,7 +131,6 @@ export async function recordPostedNews(
   );
 }
 
-// Retrieve recent posted history
 export async function getRecentPostedHistory(kv: KVNamespace): Promise<PostedNewsRecord[]> {
   const historyKey = 'history:posted';
   const historyJson = await kv.get(historyKey);
@@ -126,7 +143,6 @@ export async function getRecentPostedHistory(kv: KVNamespace): Promise<PostedNew
   }
 }
 
-// Retrieve last digest stats
 export async function getLastDigestStats(kv: KVNamespace): Promise<{
   timestamp: string;
   headline: string;
