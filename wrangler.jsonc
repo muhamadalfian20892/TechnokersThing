@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "technokersthing",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-02-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "ai": {
+    "binding": "AI"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "AI_NEWS_KV",
+      "id": "7c5ff7ca5d4243f6a16740d49de5eeb6"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 11 * * *"
+    ]
+  },
+  "vars": {
+    "CHANNEL_ID": "@aicomindo"
+  }
+}
