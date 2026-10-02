@@ -35,6 +35,15 @@ import { fetchAllAvailableModels } from '../news/models';
 import { runUnifiedAiCompletion } from '../news/ai_client';
 import { executeDailyNewsPosting } from '../index';
 import { processConnectorIntent, getAllConnectors } from '../connectors/manager';
+import {
+  processReminderIntent,
+  getAllJobs,
+  getUserJobs,
+  deleteJob,
+  saveJob,
+} from '../scheduler/manager';
+import { parseScheduleInput } from '../scheduler/parser';
+import { ScheduledJob } from '../scheduler/types';
 import { ChatMessage } from '../news/types';
 
 export interface TelegramUpdate {
@@ -106,7 +115,14 @@ export async function handleTelegramUpdate(
     text.startsWith('/help') ||
     text.startsWith('/news') ||
     text.startsWith('/reset') ||
-    text.startsWith('/clearchat');
+    text.startsWith('/clearchat') ||
+    text.startsWith('/remind') ||
+    text.startsWith('/reminders') ||
+    text.startsWith('/myreminders') ||
+    text.startsWith('/delremind') ||
+    text.startsWith('/cron') ||
+    text.startsWith('/crons') ||
+    text.startsWith('/delcron');
 
   if (text.startsWith('/') && !isPublicCommand && !userIsAdmin) {
     await sendTelegramMessage(
@@ -261,6 +277,166 @@ export async function handleTelegramUpdate(
         `Anda dapat mengonfigurasi Blog ID, Access Token Google Blogger, dan Webhooks langsung di <b>Web Dashboard</b> (tab Connectors).\n` +
         `Atau katakan saja di chat: <i>"sambungin ke blogger"</i> atau <i>"sambungin ke gmail"</i>!`
     );
+    return;
+  }
+
+  // ==========================================
+  // REMINDERS & CUSTOM CRON COMMANDS
+  // ==========================================
+  if (text.startsWith('/remind')) {
+    const input = text.replace(/^\/remind/i, '').trim();
+    if (!input) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⏰ <b>Format Perintah /remind:</b>\n\n` +
+          `• <code>/remind 10m Minum kopi</code> (10 menit lagi)\n` +
+          `• <code>/remind 1h Cek server</code> (1 jam lagi)\n` +
+          `• <code>/remind 14:30 Meeting tim</code> (Jam 14:30 WIB)\n` +
+          `• <code>/remind besok 08:00 Berangkat kerja</code>\n\n` +
+          `💡 <i>Atau Anda bisa langsung ngobrol santai: "ingetin aku 15 menit lagi angkat jemuran".</i>`
+      );
+      return;
+    }
+
+    const parsed = parseScheduleInput(input, chatId);
+    if (!parsed.success || !parsed.message) {
+      await sendTelegramMessage(token, chatId, `⚠️ ${parsed.error || 'Waktu atau pesan pengingat tidak valid.'}`);
+      return;
+    }
+
+    const newJob: ScheduledJob = {
+      id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'reminder',
+      message: parsed.message,
+      targetChatId: chatId,
+      threadId: threadId,
+      creatorId: userId,
+      creatorName: userName,
+      scheduleRaw: parsed.scheduleRaw || 'Reminder',
+      dueAt: parsed.dueAt,
+      timezoneOffsetHours: 7,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      runCount: 0,
+    };
+
+    await saveJob(env.AI_NEWS_KV, newJob);
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `✅ <b>Pengingat (Reminder) Berhasil Diatur!</b>\n\n` +
+        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
+        `⏰ <b>Waktu:</b> ${parsed.humanDescription || parsed.scheduleRaw}\n` +
+        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
+        `🔔 Saya akan mengirim notifikasi langsung ke chat ini tepat waktu.\n` +
+        `💡 <i>Ketik <code>/delremind ${newJob.id}</code> untuk membatalkan pengingat ini.</i>`
+    );
+    return;
+  }
+
+  if (text.startsWith('/cron')) {
+    const input = text.replace(/^\/cron/i, '').trim();
+    if (!input) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `🔄 <b>Format Perintah /cron (Jadwal Berulang):</b>\n\n` +
+          `• <code>/cron 0 9 * * * Minum air pagi</code> (Tiap jam 09:00 WIB)\n` +
+          `• <code>/cron tiap hari jam 08:30 Standup meeting</code>\n` +
+          `• <code>/cron tiap senin jam 10:00 Evaluasi mingguan</code>` +
+          (userIsAdmin ? `\n• Tambahkan <code>--channel</code> untuk posting otomatis ke @aicomindo` : '')
+      );
+      return;
+    }
+
+    const toChannel = userIsAdmin && input.includes('--channel');
+    const cleanInput = input.replace('--channel', '').trim();
+    const targetChat = toChannel ? env.CHANNEL_ID : chatId;
+
+    const parsed = parseScheduleInput(cleanInput, targetChat);
+    if (!parsed.success || !parsed.message || parsed.type !== 'cron') {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `⚠️ Format jadwal berulang tidak dikenali. Contoh: <code>/cron 0 9 * * * Cek server</code> atau <code>/cron tiap hari jam 09:00 Cek email</code>.`
+      );
+      return;
+    }
+
+    const newJob: ScheduledJob = {
+      id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      type: 'cron',
+      message: parsed.message,
+      targetChatId: targetChat,
+      threadId: toChannel ? undefined : threadId,
+      creatorId: userId,
+      creatorName: userName,
+      scheduleRaw: parsed.scheduleRaw || 'Cron Job',
+      cronExpression: parsed.cronExpression || '0 9 * * *',
+      timezoneOffsetHours: 7,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      runCount: 0,
+    };
+
+    await saveJob(env.AI_NEWS_KV, newJob);
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🎉 <b>Jadwal Otomatis (Cron Job) Aktif!</b>\n\n` +
+        `📌 <b>Pesan:</b> ${escapeHtml(newJob.message)}\n` +
+        `⏰ <b>Jadwal:</b> ${parsed.humanDescription || parsed.scheduleRaw}\n` +
+        `🔄 <b>Pola Cron:</b> <code>${newJob.cronExpression}</code>\n` +
+        `🎯 <b>Tujuan:</b> ${toChannel ? `Channel <b>${env.CHANNEL_ID}</b>` : 'Chat pribadi ini'}\n` +
+        `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
+        `💡 <i>Ketik <code>/delremind ${newJob.id}</code> untuk membatalkan jadwal ini.</i>`
+    );
+    return;
+  }
+
+  if (text.startsWith('/reminders') || text.startsWith('/myreminders') || text.startsWith('/crons')) {
+    const jobs = userIsAdmin ? await getAllJobs(env.AI_NEWS_KV) : await getUserJobs(env.AI_NEWS_KV, userId);
+    const activeJobs = jobs.filter((j) => j.status === 'active');
+
+    if (activeJobs.length === 0) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `📭 <b>Tidak Ada Pengingat / Cron Aktif</b>\n\n` +
+          `Anda belum memiliki pengingat aktif.\n` +
+          `Coba buat dengan: <code>/remind 10m Minum air</code> atau katakan <i>"ingetin aku 20 menit lagi cek tugas"</i>!`
+      );
+      return;
+    }
+
+    const listStr = activeJobs
+      .map((j) => {
+        const typeIcon = j.type === 'cron' ? '🔄 [CRON]' : '⏰ [REMINDER]';
+        const targetStr = String(j.targetChatId) === String(env.CHANNEL_ID) ? 'Channel @aicomindo' : 'Private';
+        return `• ${typeIcon} <b>${escapeHtml(j.message)}</b>\n  🕒 Waktu: <i>${j.scheduleRaw}</i>\n  🎯 Target: ${targetStr}\n  🆔 ID: <code>${j.id}</code> (Batal: <code>/delremind ${j.id}</code>)`;
+      })
+      .join('\n\n');
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `📋 <b>Daftar Pengingat & Cron Aktif (${activeJobs.length} item):</b>\n\n${listStr}`
+    );
+    return;
+  }
+
+  if (text.startsWith('/delremind') || text.startsWith('/delcron')) {
+    const idArg = text.replace(/^\/(?:delremind|delcron)/i, '').trim();
+    if (!idArg) {
+      await sendTelegramMessage(token, chatId, `⚠️ Masukkan ID jadwal. Contoh: <code>/delremind job_12345</code>`);
+      return;
+    }
+
+    const delRes = await deleteJob(env.AI_NEWS_KV, idArg, userId, userIsAdmin);
+    await sendTelegramMessage(token, chatId, delRes.message);
     return;
   }
 
@@ -573,6 +749,25 @@ export async function handleTelegramUpdate(
   }
 
   // ==========================================
+  // NATURAL LANGUAGE REMINDER & CRON INTENT
+  // e.g. "ingetin aku 15 menit lagi...", "bikin reminder besok jam 7 pagi..."
+  // ==========================================
+  const reminderIntent = await processReminderIntent(
+    env,
+    text,
+    userId,
+    userName,
+    chatId,
+    userIsAdmin
+  );
+  if (reminderIntent.handled && reminderIntent.replyText) {
+    await sendTelegramMessage(token, chatId, reminderIntent.replyText, {
+      replyToMessageId: msg.message_id,
+    });
+    return;
+  }
+
+  // ==========================================
   // REGULAR CONVERSATION CHAT (With Thread / User Isolation & Daily Limit)
   // ==========================================
   const chatPerm = await checkUserChatPermission(env.AI_NEWS_KV, userId, dateStr);
@@ -639,4 +834,9 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
       { replyToMessageId: msg.message_id }
     );
   }
+}
+
+function escapeHtml(text: string): string {
+  const map: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+  return text.replace(/[&<>"']/g, (m) => map[m]);
 }

@@ -43,6 +43,17 @@ import {
   processConnectorIntent,
 } from './connectors/manager';
 import { ConnectorConfig } from './connectors/types';
+import {
+  processDueJobs,
+  getAllJobs,
+  saveJob,
+  deleteJob,
+  processReminderIntent,
+  formatReminderNotification,
+  formatCronNotification,
+} from './scheduler/manager';
+import { parseScheduleInput } from './scheduler/parser';
+import { ScheduledJob } from './scheduler/types';
 import { ChatMessage } from './news/types';
 
 // Pipeline to execute daily news posting to the channel
@@ -152,14 +163,18 @@ function getSessionTokenFromRequest(request: Request): string {
 }
 
 export default {
-  // Cloudflare Scheduled Event (Cron: 0 11 * * * = 18:00 WIB)
+  // Cloudflare Scheduled Event (0 11 * * * for Daily News Digest & * * * * * for Dynamic Reminders/Crons)
   async scheduled(
     event: ScheduledEvent,
     env: Env,
     ctx: ExecutionContext
   ): Promise<void> {
-    console.log(`[Cron Trigger] Fired at UTC ${new Date().toISOString()}`);
-    ctx.waitUntil(executeDailyNewsPosting(env, false));
+    console.log(`[Cron Trigger] Fired: cron="${event.cron}" at UTC ${new Date().toISOString()}`);
+    const nowUtc = new Date();
+    if (event.cron === '0 11 * * *' || (nowUtc.getUTCHours() === 11 && nowUtc.getUTCMinutes() === 0)) {
+      ctx.waitUntil(executeDailyNewsPosting(env, false));
+    }
+    ctx.waitUntil(processDueJobs(env));
   },
 
   // HTTP Request Handler
@@ -468,35 +483,50 @@ export default {
         const adminSessionKey = 'web:admin:1023972475';
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
 
-        // 1. Natural Language Connector Intent Detector
-        const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
-        let replyText = '';
+        // 1. Natural Language Reminder / Custom Cron Intent Detector
+        const reminderRes = await processReminderIntent(
+          env,
+          userMessage,
+          1023972475,
+          'Muhamad Alfian',
+          1023972475,
+          true
+        );
 
-        if (intentRes.handled && intentRes.replyText) {
-          replyText = intentRes.replyText;
+        let replyText = '';
+        if (reminderRes.handled && reminderRes.replyText) {
+          replyText = reminderRes.replyText;
         } else {
-          // 2. AI Completion
-          const activeModel = await getActiveModel(env.AI_NEWS_KV);
-          const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+          // 2. Natural Language Connector Intent Detector
+          const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
+
+          if (intentRes.handled && intentRes.replyText) {
+            replyText = intentRes.replyText;
+          } else {
+            // 3. AI Completion
+            const activeModel = await getActiveModel(env.AI_NEWS_KV);
+            const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
 - Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
 - Sambut admin dengan hangat dan bantu apa pun yang dibutuhkan (analisis tech, kode, ringkasan, maupun konfigurasi bot).
 - Jika admin bertanya seputar menyambungkan ke Google, Blogger, Gmail, atau Webhook, jelaskan bahwa ia dapat mengisi kredensial pada tab Universal Connectors di dashboard ini.
+- Kamu juga bisa disuruh membuat reminder atau cron job secara mandiri (misal: "ingetin aku 10 menit lagi cek email", atau "bikin reminder tiap hari jam 9 pagi").
 
 STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
 1. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
 2. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
 3. Jawaban harus komprehensif, edukatif, dan to the point.`;
 
-          const messagesToSend: ChatMessage[] = [
-            { role: 'system', content: systemPrompt },
-            ...history,
-            { role: 'user', content: userMessage },
-          ];
+            const messagesToSend: ChatMessage[] = [
+              { role: 'system', content: systemPrompt },
+              ...history,
+              { role: 'user', content: userMessage },
+            ];
 
-          const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1500);
-          replyText = aiRes.text;
+            const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1500);
+            replyText = aiRes.text;
+          }
         }
 
         const updatedHistory: ChatMessage[] = [
@@ -516,6 +546,83 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
       }
     }
 
+    // Dynamic Scheduled Jobs / Reminders API: List
+    if (url.pathname === '/api/jobs' && request.method === 'GET') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const jobs = await getAllJobs(env.AI_NEWS_KV);
+      return Response.json({ ok: true, jobs });
+    }
+
+    // Dynamic Scheduled Jobs / Reminders API: Create
+    if (url.pathname === '/api/jobs/create' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      try {
+        const body = (await request.json()) as {
+          schedule?: string;
+          message?: string;
+          targetChatId?: string | number;
+          type?: string;
+        };
+        const schedule = (body.schedule || '').trim();
+        const msg = (body.message || '').trim();
+        const target = body.targetChatId || '1023972475';
+
+        if (!schedule || !msg) {
+          return Response.json({ ok: false, error: 'Jadwal dan pesan tidak boleh kosong.' }, { status: 400 });
+        }
+
+        const parsed = parseScheduleInput(`${schedule} ${msg}`, target);
+        if (!parsed.success) {
+          return Response.json({ ok: false, error: parsed.error || 'Format jadwal tidak valid.' }, { status: 400 });
+        }
+
+        const newJob: ScheduledJob = {
+          id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          type: (body.type as any) || parsed.type || 'reminder',
+          message: parsed.message || msg,
+          targetChatId: target,
+          creatorId: '1023972475',
+          creatorName: 'Muhamad Alfian (Web Admin)',
+          scheduleRaw: parsed.scheduleRaw || schedule,
+          dueAt: parsed.dueAt,
+          cronExpression: parsed.cronExpression,
+          timezoneOffsetHours: 7,
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          runCount: 0,
+        };
+
+        await saveJob(env.AI_NEWS_KV, newJob);
+        return Response.json({ ok: true, job: newJob });
+      } catch (err: any) {
+        return Response.json({ ok: false, error: err.message }, { status: 500 });
+      }
+    }
+
+    // Dynamic Scheduled Jobs / Reminders API: Delete
+    if (url.pathname === '/api/jobs/delete' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const body = (await request.json()) as { id: string };
+      const delRes = await deleteJob(env.AI_NEWS_KV, body.id, '1023972475', true);
+      return Response.json(delRes);
+    }
+
+    // Dynamic Scheduled Jobs / Reminders API: Test Trigger Now
+    if (url.pathname === '/api/jobs/test-trigger' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const body = (await request.json()) as { id: string };
+      const jobs = await getAllJobs(env.AI_NEWS_KV);
+      const target = jobs.find((j) => j.id === body.id);
+      if (!target) return Response.json({ ok: false, error: 'Jadwal tidak ditemukan' }, { status: 404 });
+
+      const text = target.type === 'cron' ? formatCronNotification(target) : formatReminderNotification(target);
+      const sendRes = await sendTelegramMessage(env.TELEGRAM_TOKEN, target.targetChatId, `[TEST TRIGGER LANGSUNG]\n\n` + text);
+      return Response.json({
+        ok: sendRes.ok,
+        message: sendRes.ok ? `Notifikasi pengujian berhasil dikirim ke target ${target.targetChatId}!` : sendRes.description,
+      });
+    }
+
     // ==========================================
     // 11. HOMEPAGE / DASHBOARD RENDER (WCAG 2.1 AAA)
     // ==========================================
@@ -526,7 +633,7 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
     }
 
     const { dateStr, isFriday, formattedDate } = getWibInfo();
-    const [paused, postedToday, activeModel, currentLimit, usage, models, connectors, chatHistory] = await Promise.all([
+    const [paused, postedToday, activeModel, currentLimit, usage, models, connectors, chatHistory, jobs] = await Promise.all([
       isPostingPaused(env.AI_NEWS_KV),
       hasPostedToday(env.AI_NEWS_KV, dateStr),
       getActiveModel(env.AI_NEWS_KV),
@@ -535,6 +642,7 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
       fetchAllAvailableModels(env),
       getAllConnectors(env.AI_NEWS_KV),
       getIsolatedChatHistory(env.AI_NEWS_KV, 'web:admin:1023972475'),
+      getAllJobs(env.AI_NEWS_KV),
     ]);
 
     const dashboardHtml = renderAdminDashboard({
@@ -549,6 +657,7 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
       models,
       connectors,
       chatHistory,
+      jobs,
     });
 
     return new Response(dashboardHtml, {
@@ -768,6 +877,7 @@ function renderAdminDashboard(data: {
   models: any[];
   connectors: ConnectorConfig[];
   chatHistory: ChatMessage[];
+  jobs: ScheduledJob[];
 }): string {
   const cfModels = data.models.filter((m) => m.provider === 'cloudflare');
   const backupModels = data.models.filter((m) => m.provider === 'backup');
@@ -1126,6 +1236,16 @@ function renderAdminDashboard(data: {
     >
       🔌 Universal Connectors
     </button>
+    <button
+      role="tab"
+      id="tab-jobs"
+      class="tab-btn"
+      aria-selected="false"
+      aria-controls="panel-jobs"
+      onclick="switchTab('jobs')"
+    >
+      ⏰ Custom Crons & Reminders
+    </button>
   </div>
 
   <main id="main-content" role="main">
@@ -1337,6 +1457,95 @@ function renderAdminDashboard(data: {
         </section>
       </div>
     </div>
+
+    <!-- ========================================== -->
+    <!-- TAB 4: CUSTOM CRONS & REMINDERS           -->
+    <!-- ========================================== -->
+    <div id="panel-jobs" role="tabpanel" class="tab-panel" aria-labelledby="tab-jobs">
+      <div id="jobAlert" style="display: none; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-weight: 700;"></div>
+
+      <div class="grid">
+        <!-- Card 1: Job Metrics -->
+        <section class="card" aria-labelledby="sec-job-stats">
+          <h2 id="sec-job-stats">
+            📊 Statistik Jadwal
+            <span class="badge badge-success">${data.jobs.filter((j) => j.status === 'active').length} AKTIF</span>
+          </h2>
+          <p>Total Pengingat (Reminder): <b>${data.jobs.filter((j) => j.type === 'reminder').length}</b></p>
+          <p>Total Jadwal Berulang (Cron): <b>${data.jobs.filter((j) => j.type === 'cron').length}</b></p>
+          <p>Frekuensi Pengecekan Sistem: <b>Tiap 1 Menit (* * * * *)</b></p>
+          <p style="font-size: 0.85rem; color: #94a3b8;">*Pengingat dan cron dievaluasi otomatis tanpa perlu deploy kode.</p>
+        </section>
+
+        <!-- Card 2: Create Job Form -->
+        <section class="card" aria-labelledby="sec-create-job">
+          <h2 id="sec-create-job">➕ Buat Pengingat atau Cron Baru</h2>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
+            <div>
+              <label for="newJobType">Tipe Jadwal:</label>
+              <select id="newJobType">
+                <option value="reminder">⏰ Pengingat Sekali Jalan (Reminder)</option>
+                <option value="cron">🔄 Tugas Berulang (Cron Job)</option>
+              </select>
+            </div>
+            <div>
+              <label for="newJobTarget">Target Pengiriman:</label>
+              <select id="newJobTarget">
+                <option value="1023972475">Chat Pribadi Admin (@alfian04121)</option>
+                <option value="${data.channelId}">Channel Resmi (${data.channelId})</option>
+              </select>
+            </div>
+          </div>
+
+          <label for="newJobSchedule">Jadwal / Waktu (Contoh: "15m", "1h", "jam 14:30", "0 9 * * *", "tiap hari jam 08:00"):</label>
+          <input type="text" id="newJobSchedule" placeholder="Contoh: 15m atau jam 18:30 atau 0 9 * * *">
+
+          <label for="newJobMessage">Isi Pesan Pengingat / Konten:</label>
+          <textarea id="newJobMessage" rows="2" placeholder="Tuliskan pesan tugas atau pengingat yang akan dikirim..."></textarea>
+
+          <button class="btn btn-primary" onclick="createCustomJob()">➕ Simpan & Aktifkan Jadwal</button>
+        </section>
+      </div>
+
+      <!-- Active Jobs List -->
+      <section class="card" style="margin-top: 1.5rem;" aria-labelledby="sec-jobs-list">
+        <h2 id="sec-jobs-list">
+          📋 Daftar Jadwal Aktif & Riwayat
+          <span class="badge">${data.jobs.length} Total</span>
+        </h2>
+
+        ${
+          data.jobs && data.jobs.length > 0
+            ? `<div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
+              ${data.jobs
+                .map(
+                  (j) => `
+                <div style="background: #050811; border: 2px solid var(--border); border-radius: 10px; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                  <div style="flex: 1; min-width: 250px;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap;">
+                      <span class="badge ${j.type === 'cron' ? 'badge-primary' : 'badge-success'}">${j.type === 'cron' ? '🔄 CRON' : '⏰ REMINDER'}</span>
+                      <span class="badge ${j.status === 'active' ? 'badge-success' : 'badge-muted'}">${j.status.toUpperCase()}</span>
+                      <code>${j.id}</code>
+                    </div>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-bottom: 0.35rem;">${escapeHtml(j.message)}</div>
+                    <div style="font-size: 0.9rem; color: #cbd5e1;">
+                      🕒 Jadwal: <b>${escapeHtml(j.scheduleRaw || '')}</b> ${j.cronExpression ? `(<code>${j.cronExpression}</code>)` : ''} &bull; 
+                      🎯 Target: <b>${String(j.targetChatId) === String(data.channelId) ? 'Channel ' + data.channelId : 'Private Chat (' + j.targetChatId + ')'}</b> &bull;
+                      📊 Eksekusi: <b>${j.runCount || 0}x</b>
+                    </div>
+                  </div>
+                  <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-secondary" style="min-height: 40px; padding: 0.5rem 1rem;" onclick="testCustomJob('${j.id}')">🚀 Uji Kirim</button>
+                    <button class="btn btn-danger" style="min-height: 40px; padding: 0.5rem 1rem;" onclick="deleteCustomJob('${j.id}')">🗑️ Hapus</button>
+                  </div>
+                </div>`
+                )
+                .join('')}
+            </div>`
+            : `<p style="text-align: center; color: #94a3b8; padding: 2rem 0;">Belum ada jadwal atau reminder yang dibuat. Gunakan formulir di atas atau katakan langsung di chat: <i>"ingetin aku 15 menit lagi cek email"</i>!</p>`
+        }
+      </section>
+    </div>
   </main>
 
   <footer style="margin-top: 3rem; text-align: center; color: #94a3b8; font-size: 0.9rem; border-top: 1px solid #1e293b; padding-top: 1.5rem;">
@@ -1346,7 +1555,7 @@ function renderAdminDashboard(data: {
   <script>
     // Tab Switching (WCAG Accessible)
     function switchTab(tabId) {
-      const tabs = ['overview', 'chat', 'connectors'];
+      const tabs = ['overview', 'chat', 'connectors', 'jobs'];
       tabs.forEach(t => {
         const btn = document.getElementById('tab-' + t);
         const panel = document.getElementById('panel-' + t);
@@ -1557,6 +1766,69 @@ function renderAdminDashboard(data: {
       });
       const data = await res.json();
       showConnectorNotice(data.message, data.success !== false);
+    }
+
+    // Custom Crons & Reminders Handlers
+    function showJobNotice(msg, isSuccess) {
+      const alertBox = document.getElementById('jobAlert');
+      if (!alertBox) return;
+      alertBox.style.display = 'block';
+      alertBox.style.background = isSuccess ? '#047857' : '#991b1b';
+      alertBox.style.color = '#ffffff';
+      alertBox.textContent = msg;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function createCustomJob() {
+      const type = document.getElementById('newJobType').value;
+      const schedule = document.getElementById('newJobSchedule').value.trim();
+      const targetChatId = document.getElementById('newJobTarget').value;
+      const message = document.getElementById('newJobMessage').value.trim();
+
+      if (!schedule || !message) {
+        alert('Mohon isi jadwal dan pesan pengingat.');
+        return;
+      }
+
+      const res = await fetch('/api/jobs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, schedule, targetChatId, message })
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        alert('Jadwal berhasil dibuat! ID: ' + data.job.id);
+        location.reload();
+      } else {
+        showJobNotice('Gagal membuat jadwal: ' + (data.error || 'Terjadi kesalahan'), false);
+      }
+    }
+
+    async function deleteCustomJob(id) {
+      if (confirm('Hapus jadwal ini: ' + id + '?')) {
+        const res = await fetch('/api/jobs/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alert(data.message || 'Jadwal berhasil dihapus');
+          location.reload();
+        } else {
+          alert('Gagal menghapus: ' + (data.message || 'Terjadi kesalahan'));
+        }
+      }
+    }
+
+    async function testCustomJob(id) {
+      const res = await fetch('/api/jobs/test-trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      alert(data.message || (res.ok ? 'Notifikasi tes berhasil dikirim!' : 'Gagal mengirim'));
     }
   </script>
 </body>
