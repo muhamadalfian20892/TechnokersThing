@@ -20,6 +20,7 @@
   },
   "vars": {
     "CHANNEL_ID": "@aicomindo",
+    "TELEGRAM_TOKEN": "7554920637:AAEqqaiHoxEeo47yy-51UXy4Q2Ny5lEzUHY",
     "BACKUP_AI_URL": "https://api.mrido1.my.id/v1",
     "BACKUP_AI_KEY": "sk-f67c79a11d5aa798-ljy78q-0e793017"
   }

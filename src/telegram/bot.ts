@@ -34,6 +34,7 @@ import { generateDailyNewsDigest, getWibInfo } from '../news/generator';
 import { fetchAllAvailableModels } from '../news/models';
 import { runUnifiedAiCompletion } from '../news/ai_client';
 import { executeDailyNewsPosting } from '../index';
+import { processConnectorIntent, getAllConnectors } from '../connectors/manager';
 import { ChatMessage } from '../news/types';
 
 export interface TelegramUpdate {
@@ -145,6 +146,7 @@ export async function handleTelegramUpdate(
           `Selamat datang di konsol kendali <b>Technokers AI Bot Pro</b>.\n\n` +
           `🔑 <b>Perintah Khusus Admin:</b>\n` +
           `• <code>/dashboard_code</code> - Buat kode OTP masuk Web Dashboard (Valid 5 Menit)\n` +
+          `• <code>/connectors</code> - Kelola integrasi Blogger, Gmail, & Webhook\n` +
           `• <code>/models</code> - Daftar model Cloudflare & Backup OpenAI API\n` +
           `• <code>/setlimit &lt;angka&gt;</code> - Atur batas chat harian user (0 = disable limit)\n` +
           `• <code>/preview</code> - Pratinjau draf berita hari ini\n` +
@@ -182,7 +184,8 @@ export async function handleTelegramUpdate(
         chatId,
         `📖 <b>Panduan Lengkap Administrator:</b>\n\n` +
           `🔑 <b>Otentikasi & Web Dashboard:</b>\n` +
-          `• <code>/dashboard_code</code> - Buat kode OTP masuk dashboard (Valid 5 menit, 1x pakai)\n\n` +
+          `• <code>/dashboard_code</code> - Buat kode OTP masuk dashboard (Valid 5 menit, 1x pakai)\n` +
+          `• <code>/connectors</code> - Cek status konektor (Google Blogger, Gmail, Webhooks)\n\n` +
           `🧠 <b>Model & Kuota:</b>\n` +
           `• <code>/models</code> - Daftar model Cloudflare & Backup Provider\n` +
           `• <code>/setmodel &lt;id&gt;</code> - Ganti model AI aktif\n` +
@@ -239,6 +242,35 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(token, chatId, `⚠️ Maaf, ada kendala saat menyusun berita. Silakan coba kembali nanti.`);
     }
     return;
+  }
+
+  // ==========================================
+  // ADMIN COMMAND: /connectors
+  // ==========================================
+  if (text.startsWith('/connectors')) {
+    const list = await getAllConnectors(env.AI_NEWS_KV);
+    const summary = list
+      .map((c) => `• <b>${c.name}</b> (${c.type}): ${c.enabled ? '🟢 Aktif' : '⚪ Nonaktif'}\n  <i>${c.description || ''}</i>`)
+      .join('\n\n');
+
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🔌 <b>Universal Connectors Status:</b>\n\n${summary}\n\n` +
+        `💡 <b>Pengaturan Mandiri:</b>\n` +
+        `Anda dapat mengonfigurasi Blog ID, Access Token Google Blogger, dan Webhooks langsung di <b>Web Dashboard</b> (tab Connectors).\n` +
+        `Atau katakan saja di chat: <i>"sambungin ke blogger"</i> atau <i>"sambungin ke gmail"</i>!`
+    );
+    return;
+  }
+
+  // Check Natural Language Connector Intent (e.g. "sambungin ke blogger", "sambungin ke gmail")
+  if (userIsAdmin) {
+    const connectorIntent = await processConnectorIntent(env.AI_NEWS_KV, text);
+    if (connectorIntent.handled && connectorIntent.replyText) {
+      await sendTelegramMessage(token, chatId, connectorIntent.replyText);
+      return;
+    }
   }
 
   // ==========================================
@@ -563,7 +595,6 @@ export async function handleTelegramUpdate(
   await sendChatAction(token, chatId, 'typing');
 
   try {
-    // Retrieve isolated conversation memory specifically for this user and thread
     const history = await getIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
     const activeModel = await getActiveModel(env.AI_NEWS_KV);
 
@@ -577,7 +608,8 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
 1. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan mudah dipahami.
 2. Gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
 3. Buat teks memiliki hierarki visual yang kontras, terstruktur rapi, dan nyaman dibaca oleh pengguna maupun screen reader.
-4. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.`;
+4. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
+5. Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
 
     const messagesToSend: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -588,7 +620,6 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
     const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1200);
     const replyText = aiRes.text;
 
-    // Save isolated conversation history for this session key
     const updatedHistory: ChatMessage[] = [
       ...history,
       { role: 'user', content: text, timestamp: Date.now() },

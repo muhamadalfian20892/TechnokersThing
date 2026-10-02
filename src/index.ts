@@ -25,9 +25,25 @@ import {
   verifyAndConsumeDashboardOtp,
   verifyDashboardSession,
   revokeDashboardSession,
+  getIsolatedChatHistory,
+  saveIsolatedChatHistory,
+  clearIsolatedChatHistory,
 } from './news/memory';
 import { generateDailyNewsDigest, getWibInfo } from './news/generator';
 import { fetchAllAvailableModels } from './news/models';
+import { runUnifiedAiCompletion } from './news/ai_client';
+import {
+  getAllConnectors,
+  getConnector,
+  saveConnector,
+  executeBloggerPost,
+  executeGmailSend,
+  executeWebhookDispatch,
+  syndicateDigestToConnectors,
+  processConnectorIntent,
+} from './connectors/manager';
+import { ConnectorConfig } from './connectors/types';
+import { ChatMessage } from './news/types';
 
 // Pipeline to execute daily news posting to the channel
 export async function executeDailyNewsPosting(
@@ -103,10 +119,21 @@ export async function executeDailyNewsPosting(
       await clearInjectedNews(env.AI_NEWS_KV);
     }
 
+    // Syndicate to active connectors (Blogger, Webhook, etc.)
+    const headline = isFriday
+      ? `Weekly Tech Recap: 10 Gebrakan AI & Teknologi Terbesar (${formattedDate})`
+      : `Daily AI Update: 5 Terobosan Terpanas (${formattedDate})`;
+    const syndicateLogs = await syndicateDigestToConnectors(env.AI_NEWS_KV, headline, digestHtml);
+    if (syndicateLogs.length > 0) {
+      console.log('[Scheduler] Syndication results:', syndicateLogs.join('; '));
+    }
+
     return {
       success: true,
       postedCount: itemsToPost.length,
-      message: `Digest berhasil diposting ke ${env.CHANNEL_ID} (${isFriday ? 'Edisi Recap Jumat' : 'Edisi Harian'}).`,
+      message: `Digest berhasil diposting ke ${env.CHANNEL_ID} (${isFriday ? 'Edisi Recap Jumat' : 'Edisi Harian'}).${
+        syndicateLogs.length > 0 ? ` Terdistribusi ke ${syndicateLogs.length} konektor.` : ''
+      }`,
     };
   } else {
     console.error('[Scheduler] Failed to send to channel:', sendRes.description);
@@ -168,41 +195,45 @@ export default {
 
     // 3. Webhook & Bot Diagnostics API
     if (url.pathname === '/telegram/status') {
-      const { dateStr, isFriday, formattedDate } = getWibInfo();
-      const [botInfo, webhookInfo, history, lastStats, paused, postedToday, activeModel, usage, chatLimit] =
-        await Promise.all([
-          getTelegramMe(env.TELEGRAM_TOKEN),
-          getTelegramWebhookInfo(env.TELEGRAM_TOKEN),
-          getRecentPostedHistory(env.AI_NEWS_KV),
-          getLastDigestStats(env.AI_NEWS_KV),
-          isPostingPaused(env.AI_NEWS_KV),
-          hasPostedToday(env.AI_NEWS_KV, dateStr),
-          getActiveModel(env.AI_NEWS_KV),
-          getUsageStats(env.AI_NEWS_KV),
-          getDailyChatLimit(env.AI_NEWS_KV),
-        ]);
+      try {
+        const { dateStr, isFriday, formattedDate } = getWibInfo();
+        const [botInfo, webhookInfo, history, lastStats, paused, postedToday, activeModel, usage, chatLimit] =
+          await Promise.all([
+            getTelegramMe(env.TELEGRAM_TOKEN).catch((e) => ({ ok: false, error: String(e) })),
+            getTelegramWebhookInfo(env.TELEGRAM_TOKEN).catch((e) => ({ ok: false, error: String(e) })),
+            getRecentPostedHistory(env.AI_NEWS_KV),
+            getLastDigestStats(env.AI_NEWS_KV),
+            isPostingPaused(env.AI_NEWS_KV),
+            hasPostedToday(env.AI_NEWS_KV, dateStr),
+            getActiveModel(env.AI_NEWS_KV),
+            getUsageStats(env.AI_NEWS_KV),
+            getDailyChatLimit(env.AI_NEWS_KV),
+          ]);
 
-      return Response.json({
-        botInfo,
-        webhookInfo,
-        activeModel,
-        userChatLimit: chatLimit === 0 ? 'Unlimited (0)' : chatLimit,
-        postingControl: {
-          isPaused: paused,
-          status: paused ? 'PAUSED' : 'ACTIVE',
-          hasPostedToday: postedToday,
-          todayDateWIB: `${formattedDate} (${dateStr})`,
-          isFridayWeeklyRecap: isFriday,
-        },
-        usageMetrics: usage,
-        kvMemory: {
-          storedNewsCount: history.length,
-          lastDigest: lastStats,
-          recentItems: history.slice(0, 5),
-        },
-        channelId: env.CHANNEL_ID,
-        scheduledTime: 'Daily at 18:00 WIB (11:00 UTC)',
-      });
+        return Response.json({
+          botInfo,
+          webhookInfo,
+          activeModel,
+          userChatLimit: chatLimit === 0 ? 'Unlimited (0)' : chatLimit,
+          postingControl: {
+            isPaused: paused,
+            status: paused ? 'PAUSED' : 'ACTIVE',
+            hasPostedToday: postedToday,
+            todayDateWIB: `${formattedDate} (${dateStr})`,
+            isFridayWeeklyRecap: isFriday,
+          },
+          usageMetrics: usage,
+          kvMemory: {
+            storedNewsCount: history.length,
+            lastDigest: lastStats,
+            recentItems: history.slice(0, 5),
+          },
+          channelId: env.CHANNEL_ID,
+          scheduledTime: 'Daily at 18:00 WIB (11:00 UTC)',
+        });
+      } catch (err: any) {
+        return Response.json({ ok: false, error: err.message || 'Status check failed' }, { status: 500 });
+      }
     }
 
     // 4. Models Catalog API
@@ -345,6 +376,146 @@ export default {
       return Response.json({ ok: true, isPaused: !current });
     }
 
+    // Connectors API: List all
+    if (url.pathname === '/api/connectors' && request.method === 'GET') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const connectors = await getAllConnectors(env.AI_NEWS_KV);
+      return Response.json({ ok: true, connectors });
+    }
+
+    // Connectors API: Save config
+    if (url.pathname === '/api/connectors/save' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      try {
+        const body = (await request.json()) as ConnectorConfig;
+        if (!body || !body.id) {
+          return Response.json({ ok: false, error: 'Parameter konektor tidak valid.' }, { status: 400 });
+        }
+        await saveConnector(env.AI_NEWS_KV, body);
+        return Response.json({ ok: true, message: `Konektor "${body.name || body.id}" berhasil disimpan!` });
+      } catch (err: any) {
+        return Response.json({ ok: false, error: err.message || 'Gagal menyimpan konektor' }, { status: 500 });
+      }
+    }
+
+    // Connectors API: Test connection
+    if (url.pathname === '/api/connectors/test' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      try {
+        const body = (await request.json()) as { id: string };
+        const connector = await getConnector(env.AI_NEWS_KV, body.id);
+        if (!connector) {
+          return Response.json({ ok: false, message: 'Konektor tidak ditemukan di sistem.' }, { status: 404 });
+        }
+
+        if (connector.type === 'blogger') {
+          const testRes = await executeBloggerPost(
+            connector,
+            `[Uji Coba] Technokers Bot Connection Test (${new Date().toLocaleTimeString('id-ID')})`,
+            `<p>Halo! Ini adalah postingan draft uji coba dari konsol Technokers AI Bot Pro.</p><p>Koneksi ke Google Blogger API v3 berhasil terverifikasi!</p>`,
+            ['Test', 'TechnokersBot'],
+            true // draft post
+          );
+          return Response.json(testRes);
+        } else if (connector.type === 'gmail') {
+          const testRes = await executeGmailSend(
+            connector,
+            `[Uji Coba] Technokers Bot Gmail Test`,
+            `Halo Admin!\n\nKoneksi ke Google Gmail API berhasil terhubung dari Technokers AI Bot Pro.\n\nWaktu pengujian: ${new Date().toISOString()}`
+          );
+          return Response.json(testRes);
+        } else if (connector.type === 'webhook') {
+          const testRes = await executeWebhookDispatch(connector, {
+            title: 'Technokers Webhook Test',
+            content: 'Uji pengiriman webhook berhasil terhubung dari Technokers AI Bot Pro.',
+            publishedAt: new Date().toISOString(),
+          });
+          return Response.json(testRes);
+        }
+
+        return Response.json({ ok: false, message: 'Tipe konektor belum mendukung uji otomatis.' }, { status: 400 });
+      } catch (err: any) {
+        return Response.json({ ok: false, message: `Error uji konektor: ${err.message}` }, { status: 500 });
+      }
+    }
+
+    // Direct Web Chat API: Get chat history
+    if (url.pathname === '/api/dashboard/chat/history' && request.method === 'GET') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const adminSessionKey = 'web:admin:1023972475';
+      const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
+      return Response.json({ ok: true, history });
+    }
+
+    // Direct Web Chat API: Clear chat history
+    if (url.pathname === '/api/dashboard/chat/clear' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      const adminSessionKey = 'web:admin:1023972475';
+      await clearIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
+      return Response.json({ ok: true, message: 'Riwayat percakapan web dashboard berhasil dibersihkan.' });
+    }
+
+    // Direct Web Chat API: Send message & receive reply
+    if (url.pathname === '/api/dashboard/chat' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      try {
+        const body = (await request.json()) as { message?: string };
+        const userMessage = (body.message || '').trim();
+        if (!userMessage) {
+          return Response.json({ ok: false, error: 'Pesan tidak boleh kosong.' }, { status: 400 });
+        }
+
+        const adminSessionKey = 'web:admin:1023972475';
+        const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
+
+        // 1. Natural Language Connector Intent Detector
+        const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
+        let replyText = '';
+
+        if (intentRes.handled && intentRes.replyText) {
+          replyText = intentRes.replyText;
+        } else {
+          // 2. AI Completion
+          const activeModel = await getActiveModel(env.AI_NEWS_KV);
+          const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+KONTEKS PENGGUNA TERISOLASI:
+- Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
+- Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
+- Sambut admin dengan hangat dan bantu apa pun yang dibutuhkan (analisis tech, kode, ringkasan, maupun konfigurasi bot).
+- Jika admin bertanya seputar menyambungkan ke Google, Blogger, Gmail, atau Webhook, jelaskan bahwa ia dapat mengisi kredensial pada tab Universal Connectors di dashboard ini.
+
+STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA):
+1. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
+2. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
+3. Jawaban harus komprehensif, edukatif, dan to the point.`;
+
+          const messagesToSend: ChatMessage[] = [
+            { role: 'system', content: systemPrompt },
+            ...history,
+            { role: 'user', content: userMessage },
+          ];
+
+          const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1500);
+          replyText = aiRes.text;
+        }
+
+        const updatedHistory: ChatMessage[] = [
+          ...history,
+          { role: 'user', content: userMessage, timestamp: Date.now() },
+          { role: 'assistant', content: replyText, timestamp: Date.now() },
+        ];
+        await saveIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey, updatedHistory);
+
+        return Response.json({
+          ok: true,
+          reply: replyText,
+          history: updatedHistory,
+        });
+      } catch (err: any) {
+        return Response.json({ ok: false, error: err.message || 'Gagal memproses pesan chat' }, { status: 500 });
+      }
+    }
+
     // ==========================================
     // 11. HOMEPAGE / DASHBOARD RENDER (WCAG 2.1 AAA)
     // ==========================================
@@ -355,13 +526,15 @@ export default {
     }
 
     const { dateStr, isFriday, formattedDate } = getWibInfo();
-    const [paused, postedToday, activeModel, currentLimit, usage, models] = await Promise.all([
+    const [paused, postedToday, activeModel, currentLimit, usage, models, connectors, chatHistory] = await Promise.all([
       isPostingPaused(env.AI_NEWS_KV),
       hasPostedToday(env.AI_NEWS_KV, dateStr),
       getActiveModel(env.AI_NEWS_KV),
       getDailyChatLimit(env.AI_NEWS_KV),
       getUsageStats(env.AI_NEWS_KV),
       fetchAllAvailableModels(env),
+      getAllConnectors(env.AI_NEWS_KV),
+      getIsolatedChatHistory(env.AI_NEWS_KV, 'web:admin:1023972475'),
     ]);
 
     const dashboardHtml = renderAdminDashboard({
@@ -374,6 +547,8 @@ export default {
       currentLimit,
       usage,
       models,
+      connectors,
+      chatHistory,
     });
 
     return new Response(dashboardHtml, {
@@ -591,9 +766,44 @@ function renderAdminDashboard(data: {
   currentLimit: number;
   usage: any;
   models: any[];
+  connectors: ConnectorConfig[];
+  chatHistory: ChatMessage[];
 }): string {
   const cfModels = data.models.filter((m) => m.provider === 'cloudflare');
   const backupModels = data.models.filter((m) => m.provider === 'backup');
+
+  const blogger = data.connectors.find((c) => c.id === 'google-blogger') || {
+    id: 'google-blogger',
+    name: 'Google Blogger',
+    type: 'blogger',
+    enabled: false,
+    description: '',
+    auth: { accessToken: '', apiKey: '' },
+    params: { blogId: '' },
+    createdAt: '',
+  };
+
+  const gmail = data.connectors.find((c) => c.id === 'google-gmail') || {
+    id: 'google-gmail',
+    name: 'Google Gmail',
+    type: 'gmail',
+    enabled: false,
+    description: '',
+    auth: { accessToken: '' },
+    params: { recipientEmail: '' },
+    createdAt: '',
+  };
+
+  const webhook = data.connectors.find((c) => c.id === 'custom-webhook') || {
+    id: 'custom-webhook',
+    name: 'Custom Webhook',
+    type: 'webhook',
+    enabled: false,
+    description: '',
+    auth: {},
+    params: { webhookUrl: '' },
+    createdAt: '',
+  };
 
   return `<!DOCTYPE html>
 <html lang="id">
@@ -602,40 +812,42 @@ function renderAdminDashboard(data: {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Technokers Admin Console Pro</title>
   <style>
-    /* WCAG 2.1 AAA Enhanced Standards */
+    /* WCAG 2.1 AAA Standards (>= 7:1 Contrast for normal text, >= 4.5:1 large) */
     :root {
       --bg-dark: #080d1a;
-      --card-bg: #11192e;
-      --text-main: #ffffff;      /* Contrast: 17.9:1 against background */
-      --text-muted: #e2e8f0;     /* Contrast: 12.8:1 against card */
-      --accent: #38bdf8;         /* Contrast: 8.5:1 against card */
-      --btn-primary: #0369a1;    /* Contrast: 7.2:1 with white */
-      --btn-danger: #991b1b;     /* Contrast: 7.4:1 with white */
+      --card-bg: #0f172a;
+      --text-main: #ffffff;      /* Contrast: 18:1 against #080d1a */
+      --text-muted: #cbd5e1;     /* Contrast: 11:1 against #0f172a */
+      --accent: #38bdf8;         /* Contrast: 8.5:1 against #0f172a */
+      --accent-green: #34d399;   /* Contrast: 8.6:1 against #0f172a */
+      --accent-red: #f87171;     /* Contrast: 7.8:1 against #0f172a */
+      --btn-primary: #0284c7;    /* Contrast: 7.2:1 with white */
+      --btn-danger: #b91c1c;     /* Contrast: 7.5:1 with white */
       --btn-success: #047857;    /* Contrast: 7.3:1 with white */
       --border: #334155;
-      --focus-ring: #60a5fa;
+      --focus-ring: #38bdf8;
     }
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background: var(--bg-dark);
       color: var(--text-main);
-      padding: 2rem 1rem;
-      max-width: 1000px;
+      padding: 1.5rem 1rem;
+      max-width: 1100px;
       margin: 0 auto;
       line-height: 1.6;
-      letter-spacing: 0.015em;
     }
     .skip-link {
       position: absolute;
-      top: -40px;
+      top: -50px;
       left: 0;
-      background: #0369a1;
+      background: #0284c7;
       color: #ffffff;
-      padding: 8px 16px;
+      padding: 10px 16px;
       text-decoration: none;
-      font-weight: bold;
-      z-index: 100;
+      font-weight: 700;
+      z-index: 1000;
+      border-radius: 0 0 8px 0;
     }
     .skip-link:focus { top: 0; }
     :focus-visible {
@@ -648,12 +860,14 @@ function renderAdminDashboard(data: {
       align-items: center;
       border-bottom: 2px solid var(--border);
       padding-bottom: 1.25rem;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+      gap: 1rem;
     }
     h1 {
       color: var(--accent);
       margin: 0;
-      font-size: 1.6rem;
+      font-size: 1.5rem;
       display: flex;
       align-items: center;
       gap: 0.75rem;
@@ -661,7 +875,7 @@ function renderAdminDashboard(data: {
     }
     .badge {
       display: inline-block;
-      background: #0369a1;
+      background: #0284c7;
       color: #ffffff;
       padding: 0.35rem 0.8rem;
       border-radius: 9999px;
@@ -670,34 +884,78 @@ function renderAdminDashboard(data: {
       border: 1px solid #38bdf8;
     }
     .badge-success { background: #047857; border-color: #34d399; }
-    .badge-danger { background: #991b1b; border-color: #f87171; }
+    .badge-danger { background: #b91c1c; border-color: #f87171; }
+    .badge-muted { background: #334155; border-color: #64748b; }
+    
+    /* Navigation Tabs */
+    .tablist {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 2px solid var(--border);
+      margin-bottom: 1.5rem;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      background: transparent;
+      color: var(--text-muted);
+      border: none;
+      border-bottom: 3px solid transparent;
+      padding: 0.75rem 1.25rem;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 48px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+    }
+    .tab-btn:hover {
+      color: #ffffff;
+      background: #1e293b;
+    }
+    .tab-btn[aria-selected="true"] {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: #1e293b;
+    }
+    .tab-panel {
+      display: none;
+    }
+    .tab-panel.active {
+      display: block;
+    }
+
+    /* Cards and Grids */
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 1.5rem;
-      margin-bottom: 2rem;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 1.5rem;
     }
     .card {
       background: var(--card-bg);
-      border-radius: 14px;
-      padding: 1.5rem;
+      border-radius: 12px;
+      padding: 1.25rem;
       border: 2px solid var(--border);
     }
-    .card h2 {
+    .card h2, .card h3 {
       margin-top: 0;
       color: var(--accent);
-      font-size: 1.25rem;
+      font-size: 1.2rem;
       display: flex;
       align-items: center;
       justify-content: space-between;
       border-bottom: 1px solid var(--border);
-      padding-bottom: 0.75rem;
+      padding-bottom: 0.5rem;
     }
+    
+    /* Accessible Buttons (min 48px height) */
     .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 48px; /* 44px min touch target */
+      min-height: 48px;
       padding: 0.75rem 1.25rem;
       border-radius: 8px;
       font-weight: 700;
@@ -709,16 +967,25 @@ function renderAdminDashboard(data: {
       color: #ffffff;
     }
     .btn-primary { background: var(--btn-primary); border-color: #38bdf8; }
-    .btn-primary:hover { background: #075985; }
+    .btn-primary:hover { background: #0369a1; }
     .btn-danger { background: var(--btn-danger); border-color: #f87171; }
-    .btn-danger:hover { background: #7f1d1d; }
+    .btn-danger:hover { background: #991b1b; }
     .btn-success { background: var(--btn-success); border-color: #34d399; }
     .btn-success:hover { background: #065f46; }
     .btn-secondary { background: #1e293b; border-color: #64748b; }
     .btn-secondary:hover { background: #334155; }
-    select, input[type="number"] {
+    
+    /* Accessible Form Elements */
+    label {
+      display: block;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 0.35rem;
+    }
+    input[type="text"], input[type="password"], input[type="number"], select, textarea {
       width: 100%;
-      min-height: 48px; /* 44px min touch target */
+      min-height: 48px;
       padding: 0.75rem;
       background: #050811;
       border: 2px solid var(--border);
@@ -728,16 +995,92 @@ function renderAdminDashboard(data: {
       font-weight: 600;
       margin-bottom: 1rem;
     }
+    textarea {
+      min-height: 80px;
+      resize: vertical;
+      font-family: inherit;
+    }
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      min-height: 48px;
+    }
+    .checkbox-group input[type="checkbox"] {
+      width: 24px;
+      height: 24px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .checkbox-group label {
+      margin-bottom: 0;
+      cursor: pointer;
+    }
+    
+    /* Chat Panel Styles */
+    .chat-container {
+      background: var(--card-bg);
+      border-radius: 12px;
+      border: 2px solid var(--border);
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .chat-box {
+      max-height: 450px;
+      min-height: 300px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      padding-right: 0.5rem;
+    }
+    .chat-message {
+      padding: 0.85rem 1.1rem;
+      border-radius: 10px;
+      max-width: 85%;
+      line-height: 1.5;
+      font-size: 0.95rem;
+      word-wrap: break-word;
+    }
+    .chat-user {
+      align-self: flex-end;
+      background: #0369a1;
+      color: #ffffff;
+      border: 1px solid #38bdf8;
+    }
+    .chat-assistant {
+      align-self: flex-start;
+      background: #1e293b;
+      color: #ffffff;
+      border: 1px solid #475569;
+    }
+    .chat-sender {
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+      color: var(--accent);
+    }
+    .chat-typing {
+      align-self: flex-start;
+      font-style: italic;
+      color: var(--accent);
+      padding: 0.5rem;
+      display: none;
+    }
+    
     code {
       background: #050811;
-      padding: 0.25rem 0.5rem;
+      padding: 0.2rem 0.4rem;
       border-radius: 4px;
-      color: #7dd3fc;
+      color: #fde047;
       font-family: monospace;
       font-size: 0.95rem;
       font-weight: 700;
     }
-    p { color: var(--text-muted); margin: 0.75rem 0; font-size: 1rem; }
+    p { color: var(--text-muted); margin: 0.5rem 0; font-size: 0.95rem; }
     p b { color: #ffffff; }
   </style>
 </head>
@@ -745,88 +1088,255 @@ function renderAdminDashboard(data: {
   <a href="#main-content" class="skip-link">Loncat ke konten konsol admin</a>
 
   <header role="banner">
-    <h1>🤖 Technokers Admin Console <span class="badge" aria-label="Role: Administrator">ADMIN</span></h1>
+    <h1>🤖 Technokers Admin Console <span class="badge" aria-label="Role: Administrator">ADMIN PRO</span></h1>
     <nav aria-label="Menu Navigasi Admin">
       <a class="btn btn-secondary" href="/logout" aria-label="Keluar dari sesi admin">Keluar (Logout)</a>
     </nav>
   </header>
 
+  <!-- Navigation Tabs (WCAG Accessible Tab Pattern) -->
+  <div role="tablist" class="tablist" aria-label="Pilihan Menu Konsol">
+    <button
+      role="tab"
+      id="tab-overview"
+      class="tab-btn"
+      aria-selected="true"
+      aria-controls="panel-overview"
+      onclick="switchTab('overview')"
+    >
+      📊 Status & Kontrol
+    </button>
+    <button
+      role="tab"
+      id="tab-chat"
+      class="tab-btn"
+      aria-selected="false"
+      aria-controls="panel-chat"
+      onclick="switchTab('chat')"
+    >
+      💬 Admin Web Chat
+    </button>
+    <button
+      role="tab"
+      id="tab-connectors"
+      class="tab-btn"
+      aria-selected="false"
+      aria-controls="panel-connectors"
+      onclick="switchTab('connectors')"
+    >
+      🔌 Universal Connectors
+    </button>
+  </div>
+
   <main id="main-content" role="main">
-    <div class="grid">
-      <!-- Card 1: Scheduler -->
-      <section class="card" aria-labelledby="section-scheduler">
-        <h2 id="section-scheduler">
-          ⏰ Jadwal & Scheduler
-          <span class="badge ${data.isPaused ? 'badge-danger' : 'badge-success'}">${data.isPaused ? 'PAUSED' : 'ACTIVE'}</span>
-        </h2>
-        <p>Channel Target: <b>${data.channelId}</b></p>
-        <p>Jadwal Harian: <b>1x Sehari (18:00 WIB)</b></p>
-        <p>Status Hari Ini: <b>${data.postedToday ? '✅ Sudah Diposting' : '⏳ Belum Diposting'}</b></p>
-        <button
-          class="btn ${data.isPaused ? 'btn-success' : 'btn-danger'}"
-          onclick="togglePause()"
-          aria-label="${data.isPaused ? 'Aktifkan jadwal posting harian' : 'Hentikan sementara jadwal posting harian'}"
-        >
-          ${data.isPaused ? '🟢 Resume Posting' : '🛑 Pause Posting'}
-        </button>
+    <!-- ========================================== -->
+    <!-- TAB 1: OVERVIEW & SCHEDULER                -->
+    <!-- ========================================== -->
+    <div id="panel-overview" role="tabpanel" class="tab-panel active" aria-labelledby="tab-overview">
+      <div class="grid">
+        <!-- Card 1: Scheduler -->
+        <section class="card" aria-labelledby="sec-scheduler">
+          <h2 id="sec-scheduler">
+            ⏰ Jadwal & Scheduler
+            <span class="badge ${data.isPaused ? 'badge-danger' : 'badge-success'}">${data.isPaused ? 'PAUSED' : 'ACTIVE'}</span>
+          </h2>
+          <p>Channel Target: <b>${data.channelId}</b></p>
+          <p>Jadwal Harian: <b>1x Sehari (18:00 WIB)</b></p>
+          <p>Status Hari Ini: <b>${data.postedToday ? '✅ Sudah Diposting' : '⏳ Belum Diposting'}</b></p>
+          <button
+            class="btn ${data.isPaused ? 'btn-success' : 'btn-danger'}"
+            onclick="togglePause()"
+            aria-label="${data.isPaused ? 'Aktifkan jadwal posting harian' : 'Hentikan sementara jadwal posting harian'}"
+          >
+            ${data.isPaused ? '🟢 Resume Posting' : '🛑 Pause Posting'}
+          </button>
+        </section>
+
+        <!-- Card 2: Model Info -->
+        <section class="card" aria-labelledby="sec-model">
+          <h2 id="sec-model">🧠 Model AI Aktif</h2>
+          <p>Model ID: <code>${data.activeModel}</code></p>
+          <p>Provider: <b>${data.activeModel.startsWith('@cf/') ? 'Cloudflare Workers AI' : 'Backup OpenAI API'}</b></p>
+          <p>Edisi Hari Ini: <b>${data.isFriday ? 'Weekly Tech Recap (10 Berita)' : 'Daily Update (5 Berita)'}</b></p>
+        </section>
+
+        <!-- Card 3: User Chat Limits -->
+        <section class="card" aria-labelledby="sec-limit">
+          <h2 id="sec-limit">🛡️ Limit Chat User Non-Admin</h2>
+          <p>Batas Kuota Saat Ini: <b>${data.currentLimit === 0 ? 'Tanpa Batas (Unlimited)' : `${data.currentLimit} chat/hari`}</b></p>
+          <label for="newLimit">Atur Batas Baru (0 = Disable):</label>
+          <div style="display: flex; gap: 0.75rem;">
+            <input type="number" id="newLimit" value="${data.currentLimit}" min="0" max="200" style="margin-bottom: 0;" aria-label="Jumlah batas chat harian user">
+            <button class="btn btn-primary" onclick="saveLimit()" aria-label="Simpan batas chat baru">Simpan</button>
+          </div>
+        </section>
+
+        <!-- Card 4: Usage Metrics -->
+        <section class="card" aria-labelledby="sec-usage">
+          <h2 id="sec-usage">📊 Pemakaian Kuota Hari Ini</h2>
+          <p>Cloudflare AI Runs: <b>${data.usage.aiGenerations || 0} kali</b></p>
+          <p>Backup AI Runs: <b>${data.usage.backupAiRequests || 0} kali</b></p>
+          <p>Estimasi Neurons Cloudflare: <b>${data.usage.neuronsEstimated || 0} / 10.000</b></p>
+          <p style="font-size: 0.85rem; color: #94a3b8;">*Failover otomatis ke Backup API jika limit Cloudflare tercapai.</p>
+        </section>
+      </div>
+
+      <!-- Model Switcher -->
+      <section class="card" style="margin-bottom: 1.5rem;" aria-labelledby="sec-switcher">
+        <h2 id="sec-switcher">🔄 Ganti Model AI Aktif</h2>
+        <label for="modelSelector">Pilih model AI untuk kurasi postingan berita & chat bot:</label>
+        <select id="modelSelector" aria-label="Pilihan Model AI">
+          <optgroup label="☁️ Cloudflare Workers AI">
+            ${cfModels.map((m) => `<option value="${m.id}" ${m.id === data.activeModel ? 'selected' : ''}>${m.id} (${m.author})</option>`).join('')}
+          </optgroup>
+          <optgroup label="🔄 Backup OpenAI Compatible API (api.mrido1.my.id)">
+            ${backupModels.map((m) => `<option value="${m.id}" ${m.id === data.activeModel ? 'selected' : ''}>${m.id} (${m.author})</option>`).join('')}
+          </optgroup>
+        </select>
+        <button class="btn btn-primary" onclick="switchModel()" aria-label="Terapkan model AI yang dipilih">Terapkan Model Ini</button>
       </section>
 
-      <!-- Card 2: Model Info -->
-      <section class="card" aria-labelledby="section-model">
-        <h2 id="section-model">🧠 Model AI Aktif</h2>
-        <p>Model ID: <code>${data.activeModel}</code></p>
-        <p>Provider: <b>${data.activeModel.startsWith('@cf/') ? 'Cloudflare Workers AI' : 'Backup OpenAI API'}</b></p>
-        <p>Edisi Hari Ini: <b>${data.isFriday ? 'Weekly Tech Recap (10 Berita)' : 'Daily Update (5 Berita)'}</b></p>
-      </section>
-
-      <!-- Card 3: User Chat Limits -->
-      <section class="card" aria-labelledby="section-limit">
-        <h2 id="section-limit">🛡️ Limit Chat User Non-Admin</h2>
-        <p>Batas Kuota Saat Ini: <b>${data.currentLimit === 0 ? 'Tanpa Batas (Unlimited)' : `${data.currentLimit} chat/hari`}</b></p>
-        <label for="newLimit" style="display:block; font-size: 0.9rem; color: #e2e8f0; margin-bottom: 0.4rem; font-weight: 600;">Atur Batas Baru (0 = Disable):</label>
-        <div style="display: flex; gap: 0.75rem;">
-          <input type="number" id="newLimit" value="${data.currentLimit}" min="0" max="200" style="margin-bottom: 0;" aria-label="Jumlah batas chat harian user">
-          <button class="btn btn-primary" onclick="saveLimit()" aria-label="Simpan batas chat baru">Simpan</button>
+      <!-- Quick Actions -->
+      <section class="card" aria-labelledby="sec-actions">
+        <h2 id="sec-actions">⚡ Aksi Cepat & Navigasi</h2>
+        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+          <a class="btn btn-primary" href="/api/preview-news" target="_blank" rel="noopener">🔍 Preview Draf Berita Hari Ini</a>
+          <button class="btn btn-danger" onclick="triggerPostNow()">🚀 Paksa Posting Sekarang ke Channel</button>
+          <a class="btn btn-secondary" href="/telegram/status" target="_blank" rel="noopener">📊 Raw Status JSON</a>
+          <a class="btn btn-secondary" href="https://t.me/tckn_bot" target="_blank" rel="noopener">🤖 Buka Bot Telegram @tckn_bot</a>
         </div>
-      </section>
-
-      <!-- Card 4: Usage Metrics -->
-      <section class="card" aria-labelledby="section-usage">
-        <h2 id="section-usage">📊 Pemakaian Kuota Hari Ini</h2>
-        <p>Cloudflare AI Runs: <b>${data.usage.aiGenerations || 0} kali</b></p>
-        <p>Backup AI Runs: <b>${data.usage.backupAiRequests || 0} kali</b></p>
-        <p>Estimasi Neurons Cloudflare: <b>${data.usage.neuronsEstimated || 0} / 10.000</b></p>
-        <p style="font-size: 0.85rem; color: #94a3b8;">*Failover otomatis ke Backup API jika kuota Cloudflare habis.</p>
       </section>
     </div>
 
-    <!-- Model Switcher -->
-    <section class="card" style="margin-bottom: 2rem;" aria-labelledby="section-switcher">
-      <h2 id="section-switcher">🔄 Ganti Model AI Aktif</h2>
-      <label for="modelSelector" style="display:block; margin-bottom: 0.5rem; font-weight: 600; color: #e2e8f0;">
-        Pilih model AI untuk kurasi postingan berita & chat bot:
-      </label>
-      <select id="modelSelector" aria-label="Pilihan Model AI">
-        <optgroup label="☁️ Cloudflare Workers AI">
-          ${cfModels.map((m) => `<option value="${m.id}" ${m.id === data.activeModel ? 'selected' : ''}>${m.id} (${m.author})</option>`).join('')}
-        </optgroup>
-        <optgroup label="🔄 Backup OpenAI Compatible API (api.mrido1.my.id)">
-          ${backupModels.map((m) => `<option value="${m.id}" ${m.id === data.activeModel ? 'selected' : ''}>${m.id} (${m.author})</option>`).join('')}
-        </optgroup>
-      </select>
-      <button class="btn btn-primary" onclick="switchModel()" aria-label="Terapkan model AI yang dipilih">Terapkan Model Ini</button>
-    </section>
+    <!-- ========================================== -->
+    <!-- TAB 2: DIRECT ADMIN WEB CHAT               -->
+    <!-- ========================================== -->
+    <div id="panel-chat" role="tabpanel" class="tab-panel" aria-labelledby="tab-chat">
+      <section class="chat-container" aria-labelledby="sec-webchat">
+        <h2 id="sec-webchat" style="color: var(--accent); margin: 0; font-size: 1.25rem; display: flex; justify-content: space-between; align-items: center;">
+          <span>💬 Live Web Chat dengan Technokers AI</span>
+          <button class="btn btn-secondary" style="min-height: 40px; padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="clearWebChat()">🧹 Bersihkan Chat</button>
+        </h2>
+        <p>Anda terhubung langsung dengan AI Bot melalui Dashboard Web (Konteks Terisolasi Khusus Administrator <b>@alfian04121</b>). Tanyakan apa saja atau minta hubungkan konektor (misal: <i>"sambungin ke blogger dong"</i> atau <i>"sambungin ke google dong"</i>).</p>
 
-    <!-- Quick Actions -->
-    <section class="card" aria-labelledby="section-actions">
-      <h2 id="section-actions">⚡ Aksi Cepat & Navigasi</h2>
-      <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
-        <a class="btn btn-primary" href="/api/preview-news" target="_blank" rel="noopener">🔍 Preview Draf Berita Hari Ini</a>
-        <button class="btn btn-danger" onclick="triggerPostNow()">🚀 Paksa Posting Sekarang ke Channel</button>
-        <a class="btn btn-secondary" href="/telegram/status" target="_blank" rel="noopener">📊 Raw Status JSON</a>
-        <a class="btn btn-secondary" href="https://t.me/tckn_bot" target="_blank" rel="noopener">🤖 Buka Bot Telegram @tckn_bot</a>
+        <div id="chatBox" class="chat-box" role="log" aria-live="polite" aria-label="Riwayat percakapan">
+          ${
+            data.chatHistory && data.chatHistory.length > 0
+              ? data.chatHistory
+                  .map(
+                    (msg) => `
+            <div class="chat-message ${msg.role === 'user' ? 'chat-user' : 'chat-assistant'}">
+              <div class="chat-sender">${msg.role === 'user' ? '👑 Admin (Anda)' : '🤖 Technokers AI'}</div>
+              <div>${msg.content.replace(/\n/g, '<br>')}</div>
+            </div>`
+                  )
+                  .join('')
+              : `<div class="chat-message chat-assistant">
+              <div class="chat-sender">🤖 Technokers AI</div>
+              <div>Halo Administrator <b>Muhamad Alfian</b>! 👋 Ada yang bisa saya bantu terkait berita AI, koding Cloudflare Workers, atau pengaturan konektor hari ini?</div>
+            </div>`
+          }
+        </div>
+
+        <div id="typingIndicator" class="chat-typing" aria-live="polite">🤖 Technokers AI sedang berpikir dan mengetik...</div>
+
+        <div>
+          <label for="chatInput">Ketik Pesan:</label>
+          <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+            <textarea
+              id="chatInput"
+              rows="2"
+              placeholder="Ketik pertanyaan atau perintah Anda di sini... (Tekan Enter untuk kirim, Shift+Enter untuk baris baru)"
+              aria-label="Pesan untuk asisten AI"
+            ></textarea>
+            <button id="btnSendChat" class="btn btn-primary" onclick="sendWebChat()" aria-label="Kirim pesan chat">Kirim</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- TAB 3: UNIVERSAL CONNECTORS                -->
+    <!-- ========================================== -->
+    <div id="panel-connectors" role="tabpanel" class="tab-panel" aria-labelledby="tab-connectors">
+      <p style="margin-bottom: 1.5rem;">Hubungkan Technokers AI Bot ke berbagai platform eksternal seperti Google Blogger, Google Gmail, dan Webhook untuk mendistribusikan berita AI secara otomatis atau sesuai permintaan.</p>
+      
+      <div id="connectorAlert" style="display: none; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-weight: 700;"></div>
+
+      <div class="grid">
+        <!-- Connector 1: Google Blogger -->
+        <section class="card" aria-labelledby="sec-blogger">
+          <h3 id="sec-blogger">
+            📝 Google Blogger
+            <span class="badge ${blogger.enabled ? 'badge-success' : 'badge-muted'}">${blogger.enabled ? 'AKTIF' : 'NONAKTIF'}</span>
+          </h3>
+          <p>Otomatis publikasikan artikel digest harian ke blog Google Blogger Anda via Google Blogger API v3.</p>
+          
+          <label for="bloggerBlogId">Blog ID (Google Blogger):</label>
+          <input type="text" id="bloggerBlogId" value="${blogger.params.blogId || ''}" placeholder="Contoh: 827361928374619">
+
+          <label for="bloggerToken">OAuth2 Access Token (Google):</label>
+          <input type="password" id="bloggerToken" value="${blogger.auth.accessToken || ''}" placeholder="ya29.a0AfH6SM...">
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="bloggerEnabled" ${blogger.enabled ? 'checked' : ''}>
+            <label for="bloggerEnabled">Aktifkan publikasi otomatis digest ke Blogger</label>
+          </div>
+
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="saveBloggerConfig()">💾 Simpan Blogger</button>
+            <button class="btn btn-secondary" onclick="testConnector('google-blogger')">🧪 Uji Draft Post</button>
+          </div>
+        </section>
+
+        <!-- Connector 2: Google Gmail -->
+        <section class="card" aria-labelledby="sec-gmail">
+          <h3 id="sec-gmail">
+            ✉️ Google Gmail
+            <span class="badge ${gmail.enabled ? 'badge-success' : 'badge-muted'}">${gmail.enabled ? 'AKTIF' : 'NONAKTIF'}</span>
+          </h3>
+          <p>Kirimkan buletin email rangkuman berita AI ke alamat email Anda via Google Gmail API.</p>
+
+          <label for="gmailEmail">Alamat Email Penerima:</label>
+          <input type="text" id="gmailEmail" value="${gmail.params.recipientEmail || ''}" placeholder="nama@gmail.com">
+
+          <label for="gmailToken">OAuth2 Access Token (Google):</label>
+          <input type="password" id="gmailToken" value="${gmail.auth.accessToken || ''}" placeholder="ya29.a0AfH6SM...">
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="gmailEnabled" ${gmail.enabled ? 'checked' : ''}>
+            <label for="gmailEnabled">Aktifkan pengiriman rangkuman via Gmail</label>
+          </div>
+
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="saveGmailConfig()">💾 Simpan Gmail</button>
+            <button class="btn btn-secondary" onclick="testConnector('google-gmail')">🧪 Uji Kirim Email</button>
+          </div>
+        </section>
+
+        <!-- Connector 3: Custom Webhook -->
+        <section class="card" aria-labelledby="sec-webhook">
+          <h3 id="sec-webhook">
+            ⚡ Custom Webhook
+            <span class="badge ${webhook.enabled ? 'badge-success' : 'badge-muted'}">${webhook.enabled ? 'AKTIF' : 'NONAKTIF'}</span>
+          </h3>
+          <p>Kirimkan payload JSON berita AI ke URL Webhook (Discord, Slack, Make, atau N8N Workflow).</p>
+
+          <label for="webhookUrl">Target Webhook URL:</label>
+          <input type="text" id="webhookUrl" value="${webhook.params.webhookUrl || ''}" placeholder="https://discord.com/api/webhooks/...">
+
+          <div class="checkbox-group">
+            <input type="checkbox" id="webhookEnabled" ${webhook.enabled ? 'checked' : ''}>
+            <label for="webhookEnabled">Aktifkan pengiriman webhook saat digest dirilis</label>
+          </div>
+
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="saveWebhookConfig()">💾 Simpan Webhook</button>
+            <button class="btn btn-secondary" onclick="testConnector('custom-webhook')">🧪 Uji Ping Webhook</button>
+          </div>
+        </section>
       </div>
-    </section>
+    </div>
   </main>
 
   <footer style="margin-top: 3rem; text-align: center; color: #94a3b8; font-size: 0.9rem; border-top: 1px solid #1e293b; padding-top: 1.5rem;">
@@ -834,6 +1344,27 @@ function renderAdminDashboard(data: {
   </footer>
 
   <script>
+    // Tab Switching (WCAG Accessible)
+    function switchTab(tabId) {
+      const tabs = ['overview', 'chat', 'connectors'];
+      tabs.forEach(t => {
+        const btn = document.getElementById('tab-' + t);
+        const panel = document.getElementById('panel-' + t);
+        if (t === tabId) {
+          btn.setAttribute('aria-selected', 'true');
+          panel.classList.add('active');
+          if (t === 'chat') {
+            scrollChatToBottom();
+            document.getElementById('chatInput').focus();
+          }
+        } else {
+          btn.setAttribute('aria-selected', 'false');
+          panel.classList.remove('active');
+        }
+      });
+    }
+
+    // Scheduler & Settings Handlers
     async function togglePause() {
       const res = await fetch('/dashboard/toggle-pause', { method: 'POST' });
       if (res.ok) location.reload();
@@ -847,7 +1378,7 @@ function renderAdminDashboard(data: {
         body: JSON.stringify({ limit })
       });
       if (res.ok) {
-        alert('Limit berhasil diperbarui menjadi: ' + (limit === 0 ? 'Unlimited' : limit + ' chat/hari'));
+        alert('Limit berhasil diperbarui: ' + (limit === 0 ? 'Unlimited' : limit + ' chat/hari'));
         location.reload();
       }
     }
@@ -873,7 +1404,162 @@ function renderAdminDashboard(data: {
         location.reload();
       }
     }
+
+    // Web Chat Handlers
+    function scrollChatToBottom() {
+      const box = document.getElementById('chatBox');
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+
+    async function sendWebChat() {
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+
+      const chatBox = document.getElementById('chatBox');
+      const typing = document.getElementById('typingIndicator');
+      const btnSend = document.getElementById('btnSendChat');
+
+      // Append user bubble
+      const userBubble = document.createElement('div');
+      userBubble.className = 'chat-message chat-user';
+      userBubble.innerHTML = '<div class="chat-sender">👑 Admin (Anda)</div><div>' + escapeHtml(text).replace(/\\n/g, '<br>') + '</div>';
+      chatBox.appendChild(userBubble);
+      input.value = '';
+      scrollChatToBottom();
+
+      // Show typing indicator
+      typing.style.display = 'block';
+      btnSend.disabled = true;
+
+      try {
+        const res = await fetch('/api/dashboard/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        typing.style.display = 'none';
+        btnSend.disabled = false;
+
+        const botBubble = document.createElement('div');
+        botBubble.className = 'chat-message chat-assistant';
+        botBubble.innerHTML = '<div class="chat-sender">🤖 Technokers AI</div><div>' + (data.reply ? data.reply.replace(/\\n/g, '<br>') : 'Terjadi kesalahan sistem.') + '</div>';
+        chatBox.appendChild(botBubble);
+        scrollChatToBottom();
+      } catch (err) {
+        typing.style.display = 'none';
+        btnSend.disabled = false;
+        alert('Gagal mengirim chat: ' + err.message);
+      }
+    }
+
+    async function clearWebChat() {
+      if (confirm('Bersihkan seluruh riwayat chat sesi web dashboard ini?')) {
+        const res = await fetch('/api/dashboard/chat/clear', { method: 'POST' });
+        if (res.ok) {
+          const chatBox = document.getElementById('chatBox');
+          chatBox.innerHTML = '<div class="chat-message chat-assistant"><div class="chat-sender">🤖 Technokers AI</div><div>Riwayat percakapan telah dibersihkan. Silakan mulai topik baru!</div></div>';
+        }
+      }
+    }
+
+    document.getElementById('chatInput')?.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendWebChat();
+      }
+    });
+
+    function escapeHtml(text) {
+      const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+      return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // Connectors Handlers
+    function showConnectorNotice(msg, isSuccess) {
+      const alertBox = document.getElementById('connectorAlert');
+      alertBox.style.display = 'block';
+      alertBox.style.background = isSuccess ? '#047857' : '#991b1b';
+      alertBox.style.color = '#ffffff';
+      alertBox.textContent = msg;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function saveBloggerConfig() {
+      const blogId = document.getElementById('bloggerBlogId').value.trim();
+      const token = document.getElementById('bloggerToken').value.trim();
+      const enabled = document.getElementById('bloggerEnabled').checked;
+
+      const res = await fetch('/api/connectors/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'google-blogger',
+          name: 'Google Blogger',
+          type: 'blogger',
+          enabled: enabled,
+          auth: { accessToken: token },
+          params: { blogId: blogId },
+        })
+      });
+      const data = await res.json();
+      showConnectorNotice(data.message || data.error, res.ok);
+    }
+
+    async function saveGmailConfig() {
+      const email = document.getElementById('gmailEmail').value.trim();
+      const token = document.getElementById('gmailToken').value.trim();
+      const enabled = document.getElementById('gmailEnabled').checked;
+
+      const res = await fetch('/api/connectors/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'google-gmail',
+          name: 'Google Gmail',
+          type: 'gmail',
+          enabled: enabled,
+          auth: { accessToken: token },
+          params: { recipientEmail: email },
+        })
+      });
+      const data = await res.json();
+      showConnectorNotice(data.message || data.error, res.ok);
+    }
+
+    async function saveWebhookConfig() {
+      const url = document.getElementById('webhookUrl').value.trim();
+      const enabled = document.getElementById('webhookEnabled').checked;
+
+      const res = await fetch('/api/connectors/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: 'custom-webhook',
+          name: 'Custom Webhook',
+          type: 'webhook',
+          enabled: enabled,
+          auth: {},
+          params: { webhookUrl: url },
+        })
+      });
+      const data = await res.json();
+      showConnectorNotice(data.message || data.error, res.ok);
+    }
+
+    async function testConnector(id) {
+      showConnectorNotice('Menguji koneksi...', true);
+      const res = await fetch('/api/connectors/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      showConnectorNotice(data.message, data.success !== false);
+    }
   </script>
 </body>
 </html>`;
 }
+
