@@ -43,14 +43,12 @@ export async function generateDailyNewsDigest(
   const isWeeklyRecap = isFriday || forceRecap;
 
   if (newsItems.length === 0) {
-    return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada terobosan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi di edisi sebelumnya. Tetap pantau @aicomindo untuk update selanjutnya!\n\nLink Channel: t.me/aicomindo\n#AIUpdate #aicomindo`;
+    return `⚡ <b>UPDATE AI | @aicomindo</b>\n📅 <i>${formattedDate}</i>\n\nBelum ada terobosan atau breaking news baru hari ini. Semua perkembangan terbaru sudah terkurasi di edisi sebelumnya. Tetap pantau @aicomindo untuk update selanjutnya!\n\nLink Channel: <a href="https://t.me/aicomindo">t.me/aicomindo</a>\n#AIUpdate #aicomindo`;
   }
 
-  // 10 items on Friday, 5 on regular days
   const targetCount = isWeeklyRecap ? Math.min(10, Math.max(5, newsItems.length)) : Math.min(5, newsItems.length);
   const selected = newsItems.slice(0, targetCount);
 
-  // Retrieve style memory and active model from KV
   const [styleTemplate, activeModel] = await Promise.all([
     getStyleMemory(env.AI_NEWS_KV),
     getActiveModel(env.AI_NEWS_KV),
@@ -77,7 +75,7 @@ Kamu memiliki gaya penulisan yang SANGAT MENARIK, BOLD, DETAIL, BERBOBOT, DILENG
 TUGASMU:
 Tulis postingan ${editionType} berdasarkan ${selected.length} bahan berita yang diberikan.
 
-PANDUAN UTAMA PANJANG & KUALITAS BERITA (SANGAT PENTING!):
+PANDUAN UTAMA PANJANG & KUALITAS BERITA:
 1. JANGAN PERNAH MENULIS BERITA PENDEK ATAU CUMA 1 KALIMAT!
 2. Setiap nomor berita WAJIB DITULIS 1 PARAGRAF UTUH (3 hingga 5 kalimat padat dan mendalam).
 3. Isi setiap poin berita harus menguraikan:
@@ -85,28 +83,20 @@ PANDUAN UTAMA PANJANG & KUALITAS BERITA (SANGAT PENTING!):
    - NILAI / ANGKA jika ada (Misal: $32 Miliar, Rp 500 Triliun, 100 ribu GPU, dsb.)
    - ALASAN KORPORAT / LATAR BELAKANG di balik keputusan tersebut
    - DAMPAK NYATA bagi industri, privasi data, atau pengguna sehari-hari
-   - Tautan sumber di akhir paragraf dalam format: (Sumber: <a href="LINK">NamaSumber</a>)
+   - Tautan sumber di akhir paragraf dalam format ramah pembaca layar (WCAG 2.1 AAA): (Sumber: <a href="LINK">Baca liputan di NamaSumber</a>)
 
-BERIKUT ADALAH MEMORI CONTOH GAYA & KEDALAMAN PENULISAN YANG WAJIB KAMU TIRU PERSIS:
+STANDAR AKSESIBILITAS TELEGRAM (WCAG 2.1 AAA Text Standard):
+- Gunakan hierarki semantik yang jelas: Judul tebal <b>...</b>, pemisah paragraf ganda (\n\n) agar nyaman dibaca oleh pengguna maupun screen reader.
+- Jangan gunakan simbol atau singkatan yang ambigu.
+- Gunakan teks tautan yang deskriptif (misal: "Baca selengkapnya di TechCrunch", BUKAN "klik di sini").
+- Gunakan tag HTML Telegram resmi (<b>, <i>, <code>, <a>). Jangan gunakan markdown asterisks.
+
+BERIKUT ADALAH MEMORI CONTOH GAYA & KEDALAMAN PENULISAN:
 ---
 ${styleTemplate}
 ---
 
-FORMATTING RULES:
-1. Gunakan tag format HTML Telegram:
-   - <b>Teks tebal</b> untuk headline utama dan judul nomor berita
-   - <i>Teks miring</i> jika perlu
-   - <a href="URL">Teks Link</a> untuk tautan sumber asli
-   JANGAN gunakan format Markdown asterisks (** atau * atau #).
-2. Ikuti struktur persis contoh:
-   - Headline Utama Menohok dengan 2-3 Emoji
-   - Paragraf Pembuka ("Dua minggu/seminggu terakhir ini dunia tech bener-bener gak kasih kita napas...")
-   - Poin-poin berita bernomor 1 sampai ${selected.length} dengan penjelasan panjang dan berbobot
-   - Bagian "Pandangan Saya:" (opini/analisis tajam tentang pergeseran tren besar)
-   - Pertanyaan pemicu diskusi interaktif
-   - Tautan channel: t.me/aicomindo
-   - Hashtags relevan
-3. Gunakan URL asli yang diberikan di data.`;
+Gunakan URL asli yang disediakan. Tulis selengkap dan seberbobot mungkin.`;
 
   const userPrompt = `Berikut adalah ${selected.length} bahan berita AI:\n\n${newsSummaryList}\n\nTuliskan postingan ${editionType} lengkap, panjang, dan berbobot sekarang mengikuti contoh gaya di atas:`;
 
@@ -123,10 +113,10 @@ FORMATTING RULES:
 
     return result.text;
   } catch (err) {
-    console.error('[AI Generator] Both active model and fallback failed:', err);
+    console.error('[AI Generator] Error generating digest:', err);
   }
 
-  // Graceful fallback structure
+  // Fallback
   const headline = isWeeklyRecap
     ? `🔥 <b>RECAP MINGGUAN AI: Gebrakan Teknologi Paling Gila Minggu Ini! 🛡️🤝💰</b>`
     : `⚡ <b>AI DAILY UPDATE: Gebrakan Terpanas Hari Ini! 🚀💡</b>`;
@@ -142,13 +132,13 @@ FORMATTING RULES:
     ``,
     ...selected.map(
       (item, idx) =>
-        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} Langkah strategis ini memperlihatkan bagaimana raksasa teknologi terus berakselerasi untuk mengamankan dominasi di pasar kecerdasan buatan. Implikasinya akan sangat terasa pada ekosistem pengguna dan percepatan adopsi industri. (Sumber: <a href="${item.url}">${escapeHtml(item.source)}</a>)\n`
+        `<b>${idx + 1}. ${escapeHtml(item.title)}</b>\n${escapeHtml(item.snippet || 'Perkembangan terbaru di industri AI.')} Langkah strategis ini memperlihatkan akselerasi raksasa teknologi untuk mengamankan dominasi di pasar AI global. (Sumber: <a href="${item.url}">Baca artikel lengkap di ${escapeHtml(item.source)}</a>)\n`
     ),
     `<b>Pandangan Saya:</b>\nKita bener-bener lagi transisi dari AI yang cuma "pinter jawab" jadi AI yang "pinter kerja" (Agentic). Dari chip sampe software, semuanya lagi berevolusi gila-gilaan.`,
     ``,
     `Nah, dari berita di atas, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih opini kalian di bawah! 🚀🧪`,
     ``,
-    `Link Channel: t.me/aicomindo`,
+    `Link Channel: <a href="https://t.me/aicomindo">t.me/aicomindo</a>`,
     `#TechRecap #AIUpdate #Google #Meta #OpenAI #aicomindo`,
   ].join('\n');
 }

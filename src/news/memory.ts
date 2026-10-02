@@ -4,6 +4,7 @@ import {
   UsageMetric,
   AuditLogEntry,
   ChatMessage,
+  UserProfile,
   DashboardOtpRecord,
   DashboardSessionRecord,
 } from './types';
@@ -254,7 +255,7 @@ export async function isUserAdmin(kv: KVNamespace, userId: string | number): Pro
 
 export async function getDailyChatLimit(kv: KVNamespace): Promise<number> {
   const val = await kv.get('config:daily_chat_limit');
-  if (val === null) return 40; // Default 40
+  if (val === null) return 40;
   const num = parseInt(val, 10);
   return isNaN(num) ? 40 : num;
 }
@@ -282,7 +283,6 @@ export async function incrementUserDailyChat(
   const key = `user_chat_count:${userId}:${dateStr}`;
   const current = await getUserDailyChatCount(kv, userId, dateStr);
   const next = current + 1;
-  // TTL 48 hours
   await kv.put(key, String(next), { expirationTtl: 48 * 60 * 60 });
   return next;
 }
@@ -298,7 +298,6 @@ export async function checkUserChatPermission(
   }
 
   const limit = await getDailyChatLimit(kv);
-  // 0 means limit is disabled
   if (limit === 0) {
     return { allowed: true, count: 0, limit: 0, isAdmin: false };
   }
@@ -312,15 +311,104 @@ export async function checkUserChatPermission(
 }
 
 // ==========================================
-// 7. Web Dashboard OTP & Session Security
+// 7. Per-User and Per-Thread Memory Isolation
 // ==========================================
 
-// Generate 5-minute one-time authentication code for web dashboard
+export function buildChatSessionKey(
+  chatId: number | string,
+  userId: number | string,
+  threadId?: number | string
+): string {
+  const strChat = String(chatId);
+  const strUser = String(userId);
+  if (strChat === strUser) {
+    // Private chat: strictly isolated per Telegram user
+    return `dm:user:${strUser}`;
+  }
+  // Group chat / topic thread: isolated per user inside that topic
+  const strThread = threadId ? String(threadId) : 'main';
+  return `group:${strChat}:topic:${strThread}:user:${strUser}`;
+}
+
+export async function getUserProfile(
+  kv: KVNamespace,
+  userId: string | number
+): Promise<UserProfile | null> {
+  const key = `profile:${userId}`;
+  const raw = await kv.get(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertUserProfile(
+  kv: KVNamespace,
+  userId: string | number,
+  info: { firstName?: string; lastName?: string; username?: string }
+): Promise<UserProfile> {
+  const key = `profile:${userId}`;
+  const existing = await getUserProfile(kv, userId);
+  const now = new Date().toISOString();
+
+  const profile: UserProfile = {
+    userId: String(userId),
+    firstName: info.firstName || existing?.firstName,
+    lastName: info.lastName || existing?.lastName,
+    username: info.username || existing?.username,
+    firstSeen: existing?.firstSeen || now,
+    lastSeen: now,
+    totalMessages: (existing?.totalMessages || 0) + 1,
+  };
+
+  // Profile stored for 90 days
+  await kv.put(key, JSON.stringify(profile), { expirationTtl: 90 * 24 * 60 * 60 });
+  return profile;
+}
+
+export async function getIsolatedChatHistory(
+  kv: KVNamespace,
+  sessionKey: string
+): Promise<ChatMessage[]> {
+  const key = `chat_ctx:${sessionKey}`;
+  const raw = await kv.get(key);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+export async function saveIsolatedChatHistory(
+  kv: KVNamespace,
+  sessionKey: string,
+  messages: ChatMessage[]
+): Promise<void> {
+  const key = `chat_ctx:${sessionKey}`;
+  // Keep last 10 messages (5 turns) with 24 hours TTL per thread
+  const trimmed = messages.slice(-10);
+  await kv.put(key, JSON.stringify(trimmed), { expirationTtl: 24 * 60 * 60 });
+}
+
+export async function clearIsolatedChatHistory(
+  kv: KVNamespace,
+  sessionKey: string
+): Promise<void> {
+  const key = `chat_ctx:${sessionKey}`;
+  await kv.delete(key);
+}
+
+// ==========================================
+// 8. Web Dashboard OTP & Session Security
+// ==========================================
+
 export async function generateDashboardOtp(
   kv: KVNamespace,
   userId: string | number
 ): Promise<string> {
-  // Generate a cryptographically random 6-digit numeric OTP code
   const array = new Uint32Array(1);
   crypto.getRandomValues(array);
   const code = (100000 + (array[0] % 900000)).toString();
@@ -328,16 +416,14 @@ export async function generateDashboardOtp(
   const record: DashboardOtpRecord = {
     code,
     createdBy: String(userId),
-    expiresAt: Date.now() + 5 * 60 * 1000, // 5 minutes
+    expiresAt: Date.now() + 5 * 60 * 1000,
   };
 
-  // Stored in KV with TTL 300 seconds (5 minutes)
   await kv.put(`dashboard_otp:${code}`, JSON.stringify(record), { expirationTtl: 300 });
   await addAuditLog(kv, 'GENERATE_DASHBOARD_OTP', String(userId), `Code generated`);
   return code;
 }
 
-// Verify and consume OTP with 3 failed attempts lockout
 export async function verifyAndConsumeDashboardOtp(
   kv: KVNamespace,
   inputCode: string,
@@ -347,7 +433,6 @@ export async function verifyAndConsumeDashboardOtp(
   const lockKey = `login_lock:${clientIp}`;
   const attemptsKey = `login_attempts:${clientIp}`;
 
-  // Check if IP is currently locked out
   const isLocked = await kv.get(lockKey);
   if (isLocked) {
     return {
@@ -359,13 +444,11 @@ export async function verifyAndConsumeDashboardOtp(
   const otpKey = `dashboard_otp:${cleanCode}`;
   const otpRaw = await kv.get(otpKey);
 
-  // If code is INVALID or EXPIRED
   if (!otpRaw) {
     const rawAttempts = await kv.get(attemptsKey);
     const attempts = rawAttempts ? parseInt(rawAttempts, 10) + 1 : 1;
 
     if (attempts >= 3) {
-      // Lock out for 15 minutes (900 seconds)
       await kv.put(lockKey, 'LOCKED', { expirationTtl: 900 });
       await kv.delete(attemptsKey);
       await addAuditLog(kv, 'LOGIN_LOCKOUT_TRIGGERED', clientIp, '3 failed login attempts');
@@ -382,13 +465,10 @@ export async function verifyAndConsumeDashboardOtp(
     }
   }
 
-  // Code is VALID!
-  // 1. Immediately delete code from KV so it CANNOT be used again (Single Use)
+  // Code is VALID - consume immediately
   await kv.delete(otpKey);
-  // 2. Clear failed attempts
   await kv.delete(attemptsKey);
 
-  // 3. Generate secure session token (32-character random hex)
   const sessionBuffer = new Uint8Array(16);
   crypto.getRandomValues(sessionBuffer);
   const sessionToken = Array.from(sessionBuffer)
@@ -406,10 +486,9 @@ export async function verifyAndConsumeDashboardOtp(
     token: sessionToken,
     userId: otpData.createdBy,
     createdAt: new Date().toISOString(),
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+    expiresAt: Date.now() + 24 * 60 * 60 * 1000,
   };
 
-  // Save session for 24 hours
   await kv.put(`dashboard_session:${sessionToken}`, JSON.stringify(sessionRecord), {
     expirationTtl: 24 * 60 * 60,
   });
@@ -438,41 +517,13 @@ export async function revokeDashboardSession(
 }
 
 // ==========================================
-// 8. Conversational Memory (Multi-turn chat)
-// ==========================================
-
-export async function getUserChatHistory(
-  kv: KVNamespace,
-  userId: string | number
-): Promise<ChatMessage[]> {
-  const key = `chat_ctx:${userId}`;
-  const raw = await kv.get(key);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
-}
-
-export async function saveUserChatHistory(
-  kv: KVNamespace,
-  userId: string | number,
-  messages: ChatMessage[]
-): Promise<void> {
-  const key = `chat_ctx:${userId}`;
-  const trimmed = messages.slice(-8);
-  await kv.put(key, JSON.stringify(trimmed), { expirationTtl: 2 * 60 * 60 });
-}
-
-// ==========================================
 // 9. Anti-Spam Rate Limiting (Sliding Window)
 // ==========================================
 
 export async function checkRateLimit(
   kv: KVNamespace,
   userId: string | number,
-  maxPerMinute: number = 20
+  maxPerMinute: number = 25
 ): Promise<{ allowed: boolean; remaining: number }> {
   const minuteKey = `ratelimit:${userId}:${Math.floor(Date.now() / 60000)}`;
   const current = await kv.get(minuteKey);

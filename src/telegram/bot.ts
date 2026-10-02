@@ -15,8 +15,11 @@ import {
   getAdminList,
   isUserAdmin,
   SUPER_ADMIN_ID,
-  getUserChatHistory,
-  saveUserChatHistory,
+  buildChatSessionKey,
+  upsertUserProfile,
+  getIsolatedChatHistory,
+  saveIsolatedChatHistory,
+  clearIsolatedChatHistory,
   checkRateLimit,
   getAuditLogs,
   addInjectedNews,
@@ -37,10 +40,12 @@ export interface TelegramUpdate {
   update_id: number;
   message?: {
     message_id: number;
+    message_thread_id?: number;
     from?: {
       id: number;
       is_bot: boolean;
       first_name?: string;
+      last_name?: string;
       username?: string;
     };
     chat: {
@@ -63,17 +68,28 @@ export async function handleTelegramUpdate(
 
   const chatId = msg.chat.id;
   const userId = msg.from?.id || chatId;
+  const threadId = msg.message_thread_id;
   const text = msg.text.trim();
   const userName = msg.from?.first_name || 'Teman';
+  const userHandle = msg.from?.username ? `@${msg.from.username}` : '';
   const token = env.TELEGRAM_TOKEN;
 
-  // Rate Limiting Protection (Anti-Flood in private chat)
+  // Track profile and isolated session key per user and per thread
+  await upsertUserProfile(env.AI_NEWS_KV, userId, {
+    firstName: msg.from?.first_name,
+    lastName: msg.from?.last_name,
+    username: msg.from?.username,
+  });
+
+  const sessionKey = buildChatSessionKey(chatId, userId, threadId);
+
+  // Rate Limiting Protection (Anti-Flood)
   const rateLimit = await checkRateLimit(env.AI_NEWS_KV, userId, 25);
   if (!rateLimit.allowed) {
     await sendTelegramMessage(
       token,
       chatId,
-      `⚠️ <b>Rate Limit Exceeded</b>\nAnda mengirim pesan terlalu cepat. Harap tunggu sebentar sebelum mencoba kembali.`
+      `⚠️ <b>Batas Kecepatan Terlampaui</b>\n\nAnda mengirim pesan terlalu cepat. Harap beri jeda sejenak sebelum mengirim pesan kembali.`
     );
     return;
   }
@@ -84,111 +100,130 @@ export async function handleTelegramUpdate(
   // ==========================================
   // NON-ADMIN RESTRICTION CHECK
   // ==========================================
-  // Non-admin can ONLY use: /start, /help, /news, and regular chat.
   const isPublicCommand =
-    text.startsWith('/start') || text.startsWith('/help') || text.startsWith('/news');
+    text.startsWith('/start') ||
+    text.startsWith('/help') ||
+    text.startsWith('/news') ||
+    text.startsWith('/reset') ||
+    text.startsWith('/clearchat');
 
   if (text.startsWith('/') && !isPublicCommand && !userIsAdmin) {
     await sendTelegramMessage(
       token,
       chatId,
       `⛔ <b>Akses Dibatasi</b>\n\n` +
-        `Akun Anda belum terdaftar sebagai Admin (@alfian04121).\n` +
-        `Pengguna umum hanya dapat menggunakan fitur chat tanya-jawab AI dan perintah /news.\n\n` +
-        `📢 Ikuti update berita AI terlengkap di channel <a href="https://t.me/aicomindo">@aicomindo</a>!`
+        `Perintah administratif ini khusus untuk Pengelola (@alfian04121).\n` +
+        `Pengguna umum dapat menggunakan chat interaktif AI dan perintah <code>/news</code>.\n\n` +
+        `📢 Kunjungi channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
     );
     return;
   }
 
   // ==========================================
-  // PUBLIC COMMAND 1: /start
+  // PUBLIC COMMAND: /reset & /clearchat
+  // ==========================================
+  if (text.startsWith('/reset') || text.startsWith('/clearchat')) {
+    await clearIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
+    await sendTelegramMessage(
+      token,
+      chatId,
+      `🧹 <b>Memori Obrolan Direset</b>\n\n` +
+        `Riwayat percakapan khusus untuk Anda di sesi ini telah dibersihkan. Anda dapat memulai topik obrolan baru dengan asisten AI!`
+    );
+    return;
+  }
+
+  // ==========================================
+  // PUBLIC COMMAND: /start
   // ==========================================
   if (text.startsWith('/start')) {
     if (userIsAdmin) {
       await sendTelegramMessage(
         token,
         chatId,
-        `Halo, Admin <b>${userName}</b>! 👑 (@alfian04121)\n\n` +
-          `Selamat datang di konsol kontrol <b>Technokers AI Bot Pro</b>! 🤖⚡\n\n` +
+        `Halo, Administrator <b>${userName}</b>! 👑 (@alfian04121)\n\n` +
+          `Selamat datang di konsol kendali <b>Technokers AI Bot Pro</b>.\n\n` +
           `🔑 <b>Perintah Khusus Admin:</b>\n` +
-          `• /dashboard_code - Generate kode OTP 5 menit login Web Dashboard\n` +
-          `• /models - Pilih model (Cloudflare AI & Backup OpenAI API)\n` +
-          `• /setlimit &lt;angka&gt; - Atur batas chat user (0 = disable limit)\n` +
-          `• /preview - Preview draf berita hari ini\n` +
-          `• /post_now - Paksa posting sekarang ke channel @aicomindo\n` +
-          `• /stop_posting & /resume_posting - Kontrol jeda jadwal posting\n` +
-          `• /status & /usage - Pantau sistem & kuota Neurons\n\n` +
-          `Ketik /help untuk panduan lengkap semua perintah.`
+          `• <code>/dashboard_code</code> - Buat kode OTP masuk Web Dashboard (Valid 5 Menit)\n` +
+          `• <code>/models</code> - Daftar model Cloudflare & Backup OpenAI API\n` +
+          `• <code>/setlimit &lt;angka&gt;</code> - Atur batas chat harian user (0 = disable limit)\n` +
+          `• <code>/preview</code> - Pratinjau draf berita hari ini\n` +
+          `• <code>/post_now</code> - Kirim langsung digest ke channel @aicomindo\n` +
+          `• <code>/stop_posting</code> & <code>/resume_posting</code> - Pause / resume scheduler\n` +
+          `• <code>/status</code> & <code>/usage</code> - Pantau kuota & metrik sistem\n\n` +
+          `Ketik <code>/help</code> untuk panduan lengkap semua perintah.`
       );
     } else {
       const dailyLimit = await getDailyChatLimit(env.AI_NEWS_KV);
-      const limitText = dailyLimit > 0 ? `${dailyLimit} chat/hari` : 'Unlimited';
+      const limitText = dailyLimit > 0 ? `${dailyLimit} pesan per hari` : 'Tanpa batas (Unlimited)';
       await sendTelegramMessage(
         token,
         chatId,
         `Halo, <b>${userName}</b>! 👋\n\n` +
           `Selamat datang di <b>Technokers AI Bot</b>! 🤖\n` +
-          `Asisten cerdas komunitas <a href="https://t.me/aicomindo">@aicomindo</a> (AI Community News Indonesia).\n\n` +
+          `Asisten cerdas resmi dari komunitas <a href="https://t.me/aicomindo">@aicomindo (AI Community News Indonesia)</a>.\n\n` +
           `✨ <b>Layanan yang Tersedia:</b>\n` +
-          `• <b>Tanya AI:</b> Tanyakan apa saja seputar AI, coding, atau tools teknologi (Kuota: ${limitText}).\n` +
-          `• <b>/news:</b> Baca ringkasan berita AI terkini kapan saja secara instan!\n\n` +
-          `📢 Jangan lupa gabung ke channel resmi kami di <a href="https://t.me/aicomindo">@aicomindo</a> untuk update berita harian jam 18:00 WIB!`
+          `• <b>Tanya AI:</b> Tanyakan konsep kecerdasan buatan, coding, atau model LLM (Kuota: ${limitText}). Bot mengingat alur percakapan Anda secara terisolasi.\n` +
+          `• <b>/news:</b> Baca ringkasan berita AI terhangat kapan saja secara instan.\n` +
+          `• <b>/reset:</b> Hapus memori percakapan untuk memulai topik baru.\n\n` +
+          `📢 Dapatkan rangkuman harian setiap jam 18:00 WIB di <a href="https://t.me/aicomindo">Channel Telegram @aicomindo</a>!`
       );
     }
     return;
   }
 
   // ==========================================
-  // PUBLIC COMMAND 2: /help
+  // PUBLIC COMMAND: /help
   // ==========================================
   if (text.startsWith('/help')) {
     if (userIsAdmin) {
       await sendTelegramMessage(
         token,
         chatId,
-        `📖 <b>Panduan Lengkap Admin:</b>\n\n` +
+        `📖 <b>Panduan Lengkap Administrator:</b>\n\n` +
           `🔑 <b>Otentikasi & Web Dashboard:</b>\n` +
-          `• /dashboard_code - Buat kode OTP masuk dashboard (Valid 5 menit, 1x pakai)\n\n` +
+          `• <code>/dashboard_code</code> - Buat kode OTP masuk dashboard (Valid 5 menit, 1x pakai)\n\n` +
           `🧠 <b>Model & Kuota:</b>\n` +
-          `• /models - Daftar model Cloudflare & Backup Provider\n` +
-          `• /setmodel &lt;id&gt; - Ganti model AI aktif\n` +
-          `• /usage - Cek pemakaian Neurons & Requests\n` +
-          `• /health - Uji latensi roundtrip Cloudflare & AI\n\n` +
+          `• <code>/models</code> - Daftar model Cloudflare & Backup Provider\n` +
+          `• <code>/setmodel &lt;id&gt;</code> - Ganti model AI aktif\n` +
+          `• <code>/usage</code> - Pantau pemakaian Neurons & kuota harian\n` +
+          `• <code>/health</code> - Uji latensi Cloudflare & AI\n\n` +
           `🛡️ <b>Manajemen Limit User:</b>\n` +
-          `• /setlimit &lt;n&gt; - Atur batas chat harian (Contoh: /setlimit 40, /setlimit 0)\n` +
-          `• /getlimit - Cek batas limit chat yang aktif\n\n` +
+          `• <code>/setlimit &lt;n&gt;</code> - Atur batas chat harian (Contoh: /setlimit 40, /setlimit 0)\n` +
+          `• <code>/getlimit</code> - Periksa pengaturan limit aktif\n\n` +
           `📢 <b>Kontrol Channel @aicomindo:</b>\n` +
-          `• /preview - Preview berita AI hari ini\n` +
-          `• /post_now - Kirim langsung postingan ke channel\n` +
-          `• /stop_posting - Pause posting otomatis jam 18:00 WIB\n` +
-          `• /resume_posting - Aktifkan kembali posting otomatis\n` +
-          `• /unlock_today - Buka kunci harian\n` +
-          `• /addnews &lt;j&gt; | &lt;l&gt; | &lt;i&gt; - Tambah berita manual breaking news\n` +
-          `• /search &lt;kata&gt; - Cari arsip berita di KV\n` +
-          `• /logs & /backup - Audit log & ekspor metadata`
+          `• <code>/preview</code> - Pratinjau draf berita hari ini\n` +
+          `• <code>/post_now</code> - Kirim langsung postingan ke channel\n` +
+          `• <code>/stop_posting</code> - Hentikan posting otomatis jam 18:00 WIB\n` +
+          `• <code>/resume_posting</code> - Aktifkan kembali posting otomatis\n` +
+          `• <code>/unlock_today</code> - Buka kunci harian\n` +
+          `• <code>/addnews &lt;j&gt; | &lt;l&gt; | &lt;i&gt;</code> - Suntik berita manual\n` +
+          `• <code>/search &lt;kata&gt;</code> - Cari arsip berita di KV\n` +
+          `• <code>/reset</code> - Bersihkan riwayat chat sesi ini`
       );
     } else {
       await sendTelegramMessage(
         token,
         chatId,
         `📖 <b>Panduan Penggunaan Bot:</b>\n\n` +
-          `• <b>Chat Bebas:</b> Kamu bisa langsung mengirim pertanyaan apapun seperti <i>"Apa itu LoRA dalam fine-tuning?"</i> atau <i>"Rekomendasi tool AI buat presentasi"</i>.\n` +
-          `• <b>/news:</b> Dapatkan rangkuman berita AI terpanas hari ini.\n\n` +
-          `📢 Gabung channel resmi kami di <a href="https://t.me/aicomindo">@aicomindo</a>!`
+          `• <b>Chat Interaktif:</b> Kirimkan pertanyaan apa saja seputar AI, pemrograman, atau teknologi. Asisten memiliki memori khusus percakapan Anda.\n` +
+          `• <b>/news:</b> Dapatkan rangkuman kurasi berita AI terbaru hari ini.\n` +
+          `• <b>/reset:</b> Hapus riwayat percakapan sesi Anda untuk memulai topik baru.\n\n` +
+          `📢 Gabung channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
       );
     }
     return;
   }
 
   // ==========================================
-  // PUBLIC COMMAND 3: /news
+  // PUBLIC COMMAND: /news
   // ==========================================
   if (text.startsWith('/news')) {
     await sendChatAction(token, chatId, 'typing');
     await sendTelegramMessage(
       token,
       chatId,
-      `🔍 <i>Sedang mengumpulkan berita AI global terbaru dan menyusun rangkuman mendalam untukmu...</i>`
+      `🔍 <i>Sedang mengumpulkan berita AI global terbaru dan menyusun rangkuman mendalam...</i>`
     );
 
     try {
@@ -201,13 +236,13 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(token, chatId, digest);
     } catch (err) {
       console.error('Error in /news command:', err);
-      await sendTelegramMessage(token, chatId, `⚠️ Maaf, ada kendala saat menyusun berita. Silakan coba lagi.`);
+      await sendTelegramMessage(token, chatId, `⚠️ Maaf, ada kendala saat menyusun berita. Silakan coba kembali nanti.`);
     }
     return;
   }
 
   // ==========================================
-  // ADMIN COMMAND 1: /dashboard_code
+  // ADMIN COMMANDS
   // ==========================================
   if (text === '/dashboard_code' || text === '/admin_code' || text === '/code') {
     const otpCode = await generateDashboardOtp(env.AI_NEWS_KV, userId);
@@ -218,14 +253,11 @@ export async function handleTelegramUpdate(
         `Kode Akses Anda:\n👉 <code>${otpCode}</code>\n\n` +
         `⏳ <b>Masa Berlaku:</b> 5 Menit\n` +
         `🛡️ <b>Keamanan:</b> Sekali pakai (langsung hangus setelah login). Maksimal 3x percobaan gagal sebelum dikunci.\n\n` +
-        `🌐 Buka Dashboard:\nhttps://technokersthing.hafiyanajah.workers.dev`
+        `🌐 Buka Dashboard:\n<a href="https://technokersthing.hafiyanajah.workers.dev">Akses Dashboard Web di Sini</a>`
     );
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 2: /setlimit <number> & /getlimit
-  // ==========================================
   if (text.startsWith('/setlimit')) {
     const arg = text.replace('/setlimit', '').trim();
     const newLimit = parseInt(arg, 10);
@@ -251,17 +283,10 @@ export async function handleTelegramUpdate(
   if (text.startsWith('/getlimit')) {
     const currentLimit = await getDailyChatLimit(env.AI_NEWS_KV);
     const desc = currentLimit === 0 ? 'Nonaktif (Unlimited)' : `${currentLimit} chat per hari`;
-    await sendTelegramMessage(
-      token,
-      chatId,
-      `📊 <b>Pengaturan Limit Saat Ini:</b> <b>${desc}</b>.`
-    );
+    await sendTelegramMessage(token, chatId, `📊 <b>Pengaturan Limit Saat Ini:</b> <b>${desc}</b>.`);
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 3: /models (Cloudflare & Backup)
-  // ==========================================
   if (text.startsWith('/models')) {
     await sendChatAction(token, chatId, 'typing');
     const [models, activeModel] = await Promise.all([
@@ -290,9 +315,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 4: /setmodel <id>
-  // ==========================================
   if (text.startsWith('/setmodel')) {
     const modelArg = text.replace('/setmodel', '').trim();
     if (!modelArg) {
@@ -314,9 +336,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 5: /usage
-  // ==========================================
   if (text.startsWith('/usage')) {
     const stats = await getUsageStats(env.AI_NEWS_KV);
     const freeTierDailyNeurons = 10000;
@@ -338,9 +357,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 6: /health atau /ping
-  // ==========================================
   if (text.startsWith('/health') || text.startsWith('/ping')) {
     const t0 = Date.now();
     await env.AI_NEWS_KV.get('config:active_model');
@@ -357,9 +373,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 7: /stop_posting & /resume_posting
-  // ==========================================
   if (text === '/stop_posting' || text === '/pause' || text === '/stop') {
     await setPostingPaused(env.AI_NEWS_KV, true);
     await sendTelegramMessage(
@@ -380,9 +393,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 8: /post_now
-  // ==========================================
   if (text === '/post_now' || text === '/broadcast_now') {
     await sendChatAction(token, chatId, 'typing');
     await sendTelegramMessage(
@@ -404,9 +414,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 9: /preview
-  // ==========================================
   if (text === '/preview') {
     await sendChatAction(token, chatId, 'typing');
     await sendTelegramMessage(
@@ -430,9 +437,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 10: /unlock_today
-  // ==========================================
   if (text === '/unlock_today') {
     await clearPostedTodayLock(env.AI_NEWS_KV, dateStr);
     await sendTelegramMessage(
@@ -443,9 +447,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 11: /search <query>
-  // ==========================================
   if (text.startsWith('/search')) {
     const query = text.replace('/search', '').trim();
     if (!query) {
@@ -468,9 +469,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 12: /addnews <title> | <url> | <snippet>
-  // ==========================================
   if (text.startsWith('/addnews')) {
     const raw = text.replace('/addnews', '').trim();
     const parts = raw.split('|').map((p) => p.trim());
@@ -500,9 +498,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 13: /logs
-  // ==========================================
   if (text.startsWith('/logs')) {
     const logs = await getAuditLogs(env.AI_NEWS_KV);
     const logLines = logs.slice(0, 8).map(
@@ -516,9 +511,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // ==========================================
-  // ADMIN COMMAND 14: /status
-  // ==========================================
   if (text.startsWith('/status')) {
     const [history, lastStats, paused, activeModel, currentLimit] = await Promise.all([
       getRecentPostedHistory(env.AI_NEWS_KV),
@@ -549,9 +541,8 @@ export async function handleTelegramUpdate(
   }
 
   // ==========================================
-  // REGULAR CONVERSATION CHAT (With Daily Limit Check)
+  // REGULAR CONVERSATION CHAT (With Thread / User Isolation & Daily Limit)
   // ==========================================
-  // Check user daily chat limit (Admin is exempt)
   const chatPerm = await checkUserChatPermission(env.AI_NEWS_KV, userId, dateStr);
   if (!chatPerm.allowed) {
     await sendTelegramMessage(
@@ -565,7 +556,6 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // Increment user daily count if non-admin
   if (!chatPerm.isAdmin) {
     await incrementUserDailyChat(env.AI_NEWS_KV, userId, dateStr);
   }
@@ -573,14 +563,21 @@ export async function handleTelegramUpdate(
   await sendChatAction(token, chatId, 'typing');
 
   try {
-    const history = await getUserChatHistory(env.AI_NEWS_KV, userId);
+    // Retrieve isolated conversation memory specifically for this user and thread
+    const history = await getIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
     const activeModel = await getActiveModel(env.AI_NEWS_KV);
 
     const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
-Panduan:
-1. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan menarik.
-2. Gunakan tag format HTML Telegram yang valid (<b>tebal</b>, <i>miring</i>, <code>kode</code>) jika diperlukan. Hindari markdown asterisks (** atau ##).
-3. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.`;
+KONTEKS PENGGUNA TERISOLASI:
+- Kamu sedang berbicara secara privat dengan pengguna bernama "${userName}" (${userHandle || 'ID: ' + userId}).
+- Sesi percakapan ini sepenuhnya terisolasi dan spesifik untuk pengguna ini. JANGAN PERNAH mencampur adukkan topik atau data dari pengguna lain!
+- Panggil nama pengguna dengan ramah jika relevan ("Halo ${userName}", dll).
+
+STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
+1. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan mudah dipahami.
+2. Gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
+3. Buat teks memiliki hierarki visual yang kontras, terstruktur rapi, dan nyaman dibaca oleh pengguna maupun screen reader.
+4. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.`;
 
     const messagesToSend: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -591,13 +588,13 @@ Panduan:
     const aiRes = await runUnifiedAiCompletion(env, activeModel, messagesToSend, 1200);
     const replyText = aiRes.text;
 
-    // Save multi-turn conversation memory
+    // Save isolated conversation history for this session key
     const updatedHistory: ChatMessage[] = [
       ...history,
-      { role: 'user', content: text },
-      { role: 'assistant', content: replyText },
+      { role: 'user', content: text, timestamp: Date.now() },
+      { role: 'assistant', content: replyText, timestamp: Date.now() },
     ];
-    await saveUserChatHistory(env.AI_NEWS_KV, userId, updatedHistory);
+    await saveIsolatedChatHistory(env.AI_NEWS_KV, sessionKey, updatedHistory);
 
     await sendTelegramMessage(token, chatId, replyText, {
       replyToMessageId: msg.message_id,

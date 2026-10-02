@@ -42,6 +42,17 @@ export interface CloudflareModelItem {
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  timestamp?: number;
+}
+
+export interface UserProfile {
+  userId: string;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  firstSeen: string;
+  lastSeen: string;
+  totalMessages: number;
 }
 
 export interface DashboardOtpRecord {
