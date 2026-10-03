@@ -1,93 +1,76 @@
-# Technokers AI Bot Pro (`TechnokersThing`)
+# Technokers AI Bot Pro (TechnokersThing)
 
-> 🌐 **Bahasa / Language:**  
-> **Bahasa Indonesia** | 🇬🇧 [Read the English Documentation here (README.md)](README.md)
+[English Version (README.md)](README.md)
 
-Bot Asisten AI Telegram multimodal kelas enterprise dan penerbit berita teknologi otomatis yang berjalan sepenuhnya di atas infrastruktur serverless **Cloudflare Workers**, **Workers AI**, **Cloudflare KV**, dan **Telegram Bot API**, dilengkapi web dashboard administratif berstandar aksesibilitas tertinggi **WCAG 2.1 AAA**.
+Halo, aku Alfian ([@alfian04121](https://t.me/alfian04121) di Telegram, [GitHub](https://github.com/muhamadalfian20892)).
 
-Dibuat dan dikembangkan dengan penuh dedikasi oleh **[Muhamad Alfian](https://github.com/muhamadalfian20892)** ([@alfian04121](https://t.me/alfian04121)).
+Projek ini awalnya kubuat karena aku ngelola channel komunitas Telegram AI Community News Indonesia (@aicomindo). Tiap jam 6 sore WIB, aku pengen komunitas dapat rangkuman kurasi berita AI yang berbobot dan enak dibaca tanpa harus bayar sewa VPS 24 jam yang sering nganggur. Cloudflare Workers jadi pilihan paling pas: jalan langsung di edge, cold-start hitungan milidetik, dan terintegrasi langsung ke Workers AI dengan model seperti Llama 3.3 dan Whisper.
 
----
+Lama-lama bot ini berkembang cukup jauh. Teman-teman di grup pengen bisa ngobrol langsung sama botnya, tanya koding, dan kirim pesan suara (voice note) dari HP pas lagi di jalan. Aku juga bosen sama bot AI yang bicaranya kaku banget kayak customer service bank yang ngulang salam pembuka terus, jadi kubikin bot ini punya dua mode: mode chat yang santai dan mengalir kayak ngobrol sama teman biasa, serta mode berita yang ringkas dan ngejelasin kenapa berita itu penting.
 
-## 👨‍💻 Cerita Pengembang & Latar Belakang Projek
-
-Halo semuanya! Saya **Muhamad Alfian** ([@alfian04121](https://t.me/alfian04121) di Telegram, [`muhamadalfian20892`](https://github.com/muhamadalfian20892) di GitHub).
-
-Projek ini berawal dari kebutuhan nyata saya sendiri sebagai pengelola channel komunitas teknologi **[@aicomindo](https://t.me/aicomindo)** (*AI Community News Indonesia*). Setiap sore pukul 18:00 WIB, saya ingin teman-teman di komunitas mendapatkan rangkuman kurasi berita AI, riset model bahasa besar (LLM), dan terobosan komputasi terhangat yang berbobot, mudah dipahami, dan mendalam—tanpa saya harus menyewa server VPS atau VM cloud yang boros biaya dan harus terus dipantau 24 jam.
-
-**Cloudflare Workers** adalah solusi yang sangat ideal: tanpa biaya server saat tidak digunakan (*zero idle costs*), waktu pemuatan super cepat (sub-milidetik di 330+ titik edge global), dan memiliki integrasi bawaan ke **Cloudflare Workers AI** (Llama 3.3 70B, DeepSeek R1, Whisper) langsung dari kode worker tanpa perantara.
-
-Seiring berjalannya waktu, projek ini berkembang jauh melampaui sekadar bot kurasi otomatis:
-1. **Asisten AI Multimodal yang Cerdas**: Rekan-rekan komunitas ingin bisa mengobrol santai dengan bot, bertanya koding, berdiskusi konsep AI, bahkan mengirim **pesan suara (voice note)** dari ponsel di perjalanan pulang kerja.
-2. **Karakter Bahasa yang Natural**: Saya perhatikan banyak bot AI terasa sangat kaku, membosankan, dan terdengar seperti customer service korporat. Karena itu, bot ini saya bekali dua mode gaya bicara yang tegas: **CHAT MODE** (santai, mengalir, ramah, to-the-point) dan **NEWS MODE** (menarik, tanpa istilah teknis yang memusingkan, dan dilengkapi konteks *"Mengapa ini menarik?"*).
-3. **Arsitektur Terbuka untuk Komunitas Open Source**: Saya tidak ingin nama atau user ID saya terkunci (*hardcoded*) di dalam kode sistem. Sekarang semua orang bisa melakukan *fork* atau *clone*, mengatur identitas bot dan ID Telegram mereka sendiri di [`bot.config.json`](bot.config.json), dan menjalankan bot mereka sendiri dalam hitungan menit.
+Karena projek ini open source, semua identitas dan ID Telegram admin sekarang udah kupisahin ke `bot.config.json`. Jadi kamu bisa fork repositori ini, sesuaikan pengaturannya buat komunitas atau asisten pribadimu sendiri, dan deploy ke Cloudflare Workers dalam hitungan menit.
 
 ---
 
-## 📜 Catatan Pengembang & Log Pembaruan (Developer Changelog)
+## Log Pembaruan (Update Log)
 
-Berikut adalah catatan harian pengembang dan pembaruan teknis terbaru dari projek ini:
+New on 10/04/2026:
+	Walaupun butuh penelusuran mendalam, bug menyebalkan di mana bot selalu nyapa "Halo Muhamad" di awal setiap pesan balasan sekarang udah diberesin total. Bot sekarang paham alur percakapan yang lagi jalan dan bicara wajar layaknya manusia biasa tanpa ngulang salam formal terus-menerus.
+	Menambahkan context-aware persona engine. Bot sekarang ngecek siapa yang kirim pesan: kalau mendeteksi developer atau admin utama, dia langsung bersikap santai sebagai partner dev yang siap bantu koding atau cek sistem. Kalau bicara sama member biasa, bot tetap ramah dan membantu sambil menjaga rahasia internal bot.
+	Memisahkan seluruh data identitas admin, username, nama bot, dan channel dari dalam kode ke bot.config.json. Kamu juga bisa menimpanya lewat environment variables di Cloudflare, jadi gak ada lagi variabel yang di-hardcode.
+	Memperbaiki crash di callBackupOpenAi di mana script melempar TypeError saat manggil .replace() pada URL backup yang belum diisi. Sekarang ada pengecekan awal yang aman.
+	Menambahkan verifikasi header X-Telegram-Bot-Api-Secret-Token pada endpoint webhook Telegram. Permintaan asing yang coba memalsukan webhook tanpa token rahasia langsung ditolak dengan 403 Forbidden.
+	Mengamankan /addnews dari serangan SSRF. Upaya masukin IP lokal seperti 127.0.0.1, localhost, atau 169.254.169.254 sekarang otomatis ditolak.
+	Memindahkan endpoint /api/trigger-news, /api/preview-news, dan /telegram/set-webhook ke balik proteksi login dashboard agar kuota AI gak bisa dikuras pihak luar tanpa izin.
+	Menambahkan pembersih kebocoran token (sanitizeSecretLeaks) biar kalau AI dipancing membocorkan token TELEGRAM_TOKEN atau BACKUP_AI_KEY, teksnya otomatis disensor jadi [REDACTED_SECRET].
 
-### New on 10/04/2026:
-* Walaupun butuh sedikit penelusuran mendalam di alur percakapan, bug yang sangat mengganggu di mana bot selalu menyapa *"Halo Muhamad"* di awal setiap pesan—bahkan di tengah-tengah obrolan yang sedang asyik berlangsung—akhirnya berhasil dibasmi total. Bot sekarang mengenali kesinambungan obrolan dan berbicara layaknya teman nyata tanpa reset sapaan berulang-ulang di setiap pesan balasan.
-* Menerapkan **Context-Aware Persona Engine** (`buildContextAwareSystemPersona`). Bot sekarang memeriksa identitas pengirim pesan: jika ia mendeteksi creator/admin (sesuai `ADMIN_USER_ID` atau `ADMIN_USERNAME`), bot otomatis bersikap sebagai rekan developer andal yang sigap membantu urusan teknis dan operasional. Jika berbicara dengan member komunitas umum, bot tetap ramah dan edukatif namun menjaga rahasia internal sistem secara ketat.
-* Memisahkan seluruh variabel identitas admin, bot, dan channel ke dalam [`bot.config.json`](bot.config.json) melalui modul [`getAppConfig`](src/config.ts). Tidak ada lagi user ID atau username yang di-*hardcode* di dalam kode fungsional—siapa pun kini bisa menyesuaikan konfigurasi untuk kebutuhan mereka sendiri.
-* Menemukan dan memperbaiki bug tersembunyi pada `callBackupOpenAi` di mana pemanggilan `.replace()` pada URL backup yang belum dikonfigurasi menghasilkan `TypeError: Cannot read properties of undefined`. Kami menambahkan validasi defensif sehingga ketiadaan kredensial backup ditangani dengan aman tanpa mematikan proses worker.
-* Menambahkan verifikasi keamanan header `X-Telegram-Bot-Api-Secret-Token` pada endpoint `/telegram/webhook`. Jika ada pihak yang mencoba memalsukan webhook atau melakukan *probing* tanpa token rahasia yang sah, permintaan langsung ditolak dengan status `403 Forbidden`.
-* Mengamankan perintah `/addnews` dari celah SSRF (Server-Side Request Forgery). Upaya memasukkan IP privat, loopback lokal, atau endpoint metadata (`127.0.0.1`, `localhost`, `169.254.169.254`) kini langsung diblokir secara otomatis oleh sistem validasi URL publik.
-* Memindahkan rute administratif `/api/trigger-news`, `/api/preview-news`, dan `/telegram/set-webhook` ke balik autentikasi session dashboard. Pengunjung tanpa hak akses kini menerima respons `401 Unauthorized` sehingga kuota AI Anda aman dari penyalahgunaan.
-* Mengimplementasikan `sanitizeSecretLeaks` pada balasan LLM untuk memastikan token sensitif seperti `TELEGRAM_TOKEN`, `BACKUP_AI_KEY`, atau webhook secret yang tidak sengaja terpancing keluar otomatis disensor menjadi `[REDACTED_SECRET]`.
+New on 10/03/2026:
+	Grup chat sekarang jauh lebih tenang. Kalau bot dimasukin ke grup dengan privacy mode mati, dulunya dia bakal nyamber semua obrolan orang. Sekarang bot bakal diam kecuali namanya di-mention, pesannya di-reply, atau dikasih perintah garis miring.
+	Mention username bot sekarang otomatis dibersihin dari teks perintah dan pesan obrolan, jadi model AI nerima prompt yang bersih tanpa embel-embel username bot.
+	Menambahkan dukungan pesan suara (voice note). Berkas audio yang dikirim di Telegram otomatis diunduh dan ditranskripsi pakai Cloudflare Workers AI Whisper dengan sistem fallback ganda.
+	Berkas audio di atas 20 MB langsung ditolak dengan pesan yang jelas agar proses download gak macet di tengah jalan.
+	Pesan suara yang dibalas bot bakal nampilin kutipan transkripsi teksnya terlebih dahulu biar pengguna dan screen reader bisa ngecek apa yang didengar bot.
 
-### New on 10/03/2026:
-* Obrolan di grup Telegram sekarang jauh lebih tertib dan tenang! Sebelumnya, jika bot dimasukkan ke dalam grup dengan mode privasi nonaktif, bot akan mencoba menjawab setiap obrolan santai antar member. Sekarang bot dengan sopan mengabaikan obrolan pasif dan hanya merespons jika di-mention secara eksplisit (`@bot_username`), di-*reply*, atau diberi perintah *command*.
-* Token mention seperti `@bot_username` kini otomatis dibersihkan dari perintah (misalnya `/news@nama_bot` menjadi `/news`) maupun dari pertanyaan teks bebas, sehingga AI menerima kalimat yang bersih dan fokus.
-* Pesan suara (voice note) dan berkas audio (`.ogg`, `.opus`, `.mp3`) yang dikirimkan ke Telegram kini otomatis ditranskripsikan ke teks menggunakan Cloudflare Workers AI Whisper (`@cf/openai/whisper` & `@cf/openai/whisper-large-v3-turbo`) dengan sistem *failover* multi-tier.
-* Berkas audio yang melebihi batas 20 MB (batas unduhan Telegram Bot API) kini ditolak dengan pesan yang ramah dan informatif, mencegah *hanging* saat proses pengunduhan.
-* Hasil transkripsi ditampilkan di pesan Telegram sebagai kutipan teks (`"..."`) agar pengguna dan pembaca layar (*screen reader*) dapat memverifikasi isi rekaman sebelum membaca jawaban AI.
+New on 10/02/2026:
+	Menambahkan konektor universal untuk mempublikasikan berita harian langsung ke Google Blogger dan webhook kustom.
+	Menambahkan deteksi bahasa alami untuk konektor, jadi admin tinggal ketik "sambungin ke blogger" di chat buat mulai konfigurasi.
+	Menerapkan login OTP 6-digit untuk dashboard web. Admin tinggal ketik /dashboard_code di Telegram buat dapetin kode sekali pakai yang aktif selama 5 menit.
+	Menambahkan proteksi brute-force: tiga kali salah masukin OTP bakal mengunci IP pengakses selama 15 menit dan langsung menghanguskan kodenya.
 
-### New on 10/02/2026:
-* Meluncurkan modul **Universal Connectors**. Bot kini dapat menyindikasikan kurasi berita harian secara otomatis ke Google Blogger atau mengirim *webhook* ke sistem eksternal milik pengguna.
-* Menambahkan deteksi niat percakapan alami untuk konektor—admin cukup mengatakan *"sambungin ke blogger"* di obrolan chat untuk dipandu dalam konfigurasi.
-* Menerapkan sistem autentikasi **OTP 6-Digit Sekali Pakai** untuk Web Dashboard. Admin dapat membuat kode login langsung dari Telegram menggunakan perintah `/dashboard_code` (berlaku 5 menit).
-* Menambahkan perlindungan *anti brute-force*: setelah 3 kali gagal memasukkan kode OTP, IP klien otomatis dikunci selama 15 menit dan kode langsung dibatalkan.
+New on 10/01/2026:
+	Mendesain ulang dashboard web agar memenuhi standar aksesibilitas WCAG 2.1 Level AAA.
+	Menyesuaikan kontras warna teks jadi 17.9:1, jauh di atas standar AAA yang minimal 7:1.
+	Menambahkan outline fokus keyboard tebal 3px, semantic landmark roles, skip links, dan memastikan semua tombol memenuhi ukuran minimal 44x44px.
 
-### New on 10/01/2026:
-* Merombak total Web Dashboard agar memenuhi standar aksesibilitas tertinggi dunia: **WCAG 2.1 Level AAA**.
-* Meningkatkan rasio kontras warna teks hingga **17.9:1** (`#ffffff` di atas `#080d1a`), jauh melampaui ambang batas minimum AAA yaitu 7:1.
-* Menambahkan outline fokus keyboard tebal berukuran `3px` yang jelas terlihat, atribut ARIA semantik (`role="main"`, `aria-live="polite"`), serta tautan lewati (*skip link*).
-* Memastikan seluruh tombol dan elemen masukan memenuhi ukuran minimal area sentuh 44x44 piksel untuk kenyamanan layar sentuh.
+New on 09/28/2026:
+	Menambahkan sistem pengingat dan cron otomatis. Kamu bisa bilang "ingetin aku 15 menit lagi angkat jemuran" atau "ingetin meeting besok jam 9 pagi", dan bot bakal ngitung waktunya lalu disimpan ke KV.
+	Mendukung cron berulang lewat /cron 0 9 * * * Minum air atau kalimat santai seperti "tiap hari jam 8 pagi cek server".
+	Mendukung pengiriman pengingat ke chat pribadi, channel resmi, atau notifikasi dashboard web.
 
-### New on 09/28/2026:
-* Membangun modul **Penjadwal Otonom & Pengingat Pintar**. Pengguna dapat mengetik secara santai seperti *"ingetin aku 15 menit lagi angkat jemuran"* atau *"ingetin meeting besok jam 09:00"*, dan AI akan mengekstrak waktu, menghitung zona waktu WIB (UTC+7), lalu menyimpannya di Cloudflare KV.
-* Mendukung jadwal rutin (cron job) melalui perintah `/cron 0 9 * * * Minum air pagi` maupun lewat percakapan santai (*"tiap hari jam 8 pagi cek server"*).
-* Menyediakan fleksibilitas tujuan notifikasi: pengingat dapat dikirimkan ke chat Telegram pribadi, ke channel resmi (khusus admin), atau ke konsol notifikasi Web Dashboard.
-
-### New on 09/25/2026:
-* Rilis perdana sistem kurasi berita AI harian otomatis di edge Cloudflare Workers.
-* Mengintegrasikan pemicu Cron Triggers (`0 11 * * *` UTC / 18:00 WIB) dengan mekanisme kunci harian di Cloudflare KV untuk mencegah *double posting*.
-* Menyiapkan arsitektur Dual AI Provider: model utama di Cloudflare Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) dengan *failover* otomatis ke provider backup kompatibel OpenAI jika limit Neurons harian habis.
+New on 09/25/2026:
+	Rilis awal bot pembuat ringkasan berita harian di edge Cloudflare Workers.
+	Memasang cron trigger jam 18:00 WIB (11:00 UTC) dengan penguncian KV biar gak dobel kirim berita.
+	Menggunakan Workers AI dengan Llama 3.3 sebagai model utama dan endpoint kompatibel OpenAI sebagai cadangan otomatis kalau limit harian habis.
 
 ---
 
-## 🌟 Fitur Utama
+## Fitur Utama
 
-| Fitur | Deskripsi |
-|---|---|
-| 🎙️ **Pesan Suara & Whisper STT** | Kirim pesan suara (VN) di Telegram atau rekam langsung di dashboard web. Ditranskripsikan secara otomatis dengan kutipan teks yang transparan. |
-| 🧠 **Persona Deteksi Konteks** | Mengenali pembuat/admin vs anggota komunitas. Berbicara akrab dan teknis dengan admin, serta ramah dan aman dengan member umum. |
-| 💬 **Mode CHAT vs NEWS Natural** | Mode CHAT berbicara luwes tanpa salam kaku berulang. Mode NEWS menyajikan rangkuman berita menarik dengan sudut pandang *"Mengapa ini menarik?"*. |
-| 🛡️ **Keamanan Tingkat Lanjut** | Validasi rahasia webhook token, proteksi SSRF, sensor kebocoran token (*prompt injection*), dan penguncian otomatis brute-force OTP. |
-| 👥 **Penyaring Cerdas Grup Chat** | Mengabaikan obrolan umum antar member di grup. Hanya merespons jika di-mention (`@bot`), di-*reply*, atau diberi *command*. |
-| ⏰ **Pengingat Otonom & Cron Job** | Buat pengingat dengan bahasa sehari-hari (*"ingetin 20 menit lagi"*), kelola jadwal rutin, dan pilih target pengiriman notifikasi. |
-| ♿ **Dashboard Aksesibel WCAG 2.1 AAA** | Konsol kendali lengkap dengan rasio kontras 17.9:1, navigasi keyboard penuh, skip link, dan ukuran sentuh 44x44px. |
-| 🔌 **Konektor Universal** | Terintegrasi langsung untuk memposting rangkuman berita ke Google Blogger dan webhook eksternal. |
-| ⚙️ **Konfigurasi Terbuka (Open Source)** | Seluruh identitas admin, nama bot, dan batasan kuota dapat diatur dengan mudah di [`bot.config.json`](bot.config.json). |
+- Pesan Suara dan Transkripsi Whisper: Menerima voice note (.ogg, .opus, .mp3) di Telegram maupun rekaman langsung di dashboard web. Suara ditranskripsi otomatis oleh Whisper, dan kutipan teksnya disertakan di balasan.
+- Deteksi Persona Kontekstual: Otomatis membedakan apakah sedang ngobrol sama admin atau member biasa. Ngobrol santai dan teknis dengan admin, serta ramah ke pengguna biasa sambil menjaga token sistem.
+- Mode Chat dan Mode Berita Alami: Mode chat pakai bahasa Indonesia santai sehari-hari tanpa sapaan formal berulang. Mode berita menyusun ringkasan dengan penjelasan dampak dan hashtag yang relevan.
+- Penyaring Obrolan Grup: Mengabaikan obrolan pasif antar anggota grup. Hanya merespons jika di-mention, di-reply, atau diberi perintah.
+- Pengamanan Sistem: Memvalidasi secret token webhook Telegram, memblokir URL internal dari celah SSRF, menyensor token dari balasan AI, dan membatasi percobaan OTP.
+- Pengingat dan Jadwal Cron: Memahami bahasa sehari-hari untuk bikin pengingat, mendukung format cron standar, dan mengirim notifikasi tepat waktu.
+- Dashboard Aksesibel WCAG 2.1 AAA: Dashboard pengelolaan dengan kontras tinggi (17.9:1), outline navigasi keyboard yang jelas, skip link, dan ukuran sentuh nyaman.
+- Konektor Universal: Mengirim berita harian otomatis ke Google Blogger dan webhook eksternal.
+- Konfigurasi Terbuka: Semua identitas admin dan batasan disimpan rapi di `bot.config.json` atau environment variables Cloudflare.
 
 ---
 
-## ⚙️ Panduan Konfigurasi (`bot.config.json`)
+## Konfigurasi (bot.config.json)
 
-Projek ini sepenuhnya siap untuk *open source* dan *self-hosting*. Anda dapat menyesuaikan seluruh variabel identitas di file [`bot.config.json`](bot.config.json):
+Semua identitas dan batasan kuota bot disimpan di file `bot.config.json` pada root projek:
 
 ```json
 {
@@ -119,88 +102,99 @@ Projek ini sepenuhnya siap untuk *open source* dan *self-hosting*. Anda dapat me
 ```
 
 ### Override via Environment Variables
-Anda juga dapat menimpa (*override*) konfigurasi di atas melalui variabel lingkungan Cloudflare Workers di `wrangler.jsonc` atau `.dev.vars`:
-- `ADMIN_USER_ID`: User ID numerik Telegram milik Anda.
-- `ADMIN_USERNAME`: Username Telegram admin (boleh menggunakan `@` atau tanpa `@`).
-- `ADMIN_NAME`: Nama lengkap/panggilan pengelola bot.
-- `BOT_NAME`: Nama tampilan bot Anda.
-- `BOT_USERNAME`: Username bot Telegram Anda.
-- `CHANNEL_ID`: Username channel Telegram tujuan publikasi berita (contoh: `@channelku`).
-- `DEFAULT_DAILY_LIMIT`: Batas pesan chat harian untuk pengguna umum (`0` untuk tanpa batas).
-- `TELEGRAM_WEBHOOK_SECRET`: Token rahasia verifikasi webhook Telegram.
+
+Kalau kamu lebih suka mengatur variabel lewat konfigurasi Cloudflare Worker di `wrangler.jsonc` atau `.dev.vars`, kamu bisa pasang:
+
+- ADMIN_USER_ID: User ID Telegram numerik admin.
+- ADMIN_USERNAME: Username Telegram admin (tanpa @).
+- ADMIN_NAME: Nama panggilan/tampilan admin.
+- BOT_NAME: Nama bot kamu.
+- BOT_USERNAME: Username bot kamu.
+- CHANNEL_ID: Target channel Telegram (contoh: @channelku).
+- DEFAULT_DAILY_LIMIT: Batas chat harian member biasa (isi 0 kalau mau unlimited).
+- TELEGRAM_WEBHOOK_SECRET: Token rahasia verifikasi webhook.
 
 ---
 
-## 📱 Panduan Perintah Bot Telegram
+## Daftar Perintah
 
-### Perintah Publik (Untuk Semua Pengguna)
-- `/start`: Menampilkan sapaan pembuka, panduan fitur, dan status kuota obrolan harian.
-- `/help`: Panduan lengkap cara berinteraksi, membaca berita, dan mengatur pengingat.
-- `/news`: Menghasilkan rangkuman berita AI terhangat secara instan.
-- `/reset` atau `/clearchat`: Membersihkan memori percakapan sesi Anda agar bisa memulai topik baru.
-- `/remind <waktu> <pesan>`: Mengatur pengingat sekali jalan (contoh: `/remind 15m Minum air`).
-- `/myreminders`: Melihat daftar pengingat aktif yang Anda miliki.
-- `/delremind <id>`: Membatalkan jadwal pengingat tertentu.
+### Perintah Umum
 
-### Perintah Khusus Administrator
-- `/dashboard_code`: Membuat kode OTP 6-digit untuk login ke Web Dashboard (berlaku 5 menit).
-- `/connectors`: Memeriksa status integrasi Google Blogger, Gmail, dan Webhook.
-- `/models`: Melihat daftar model Cloudflare Workers AI dan backup OpenAI API.
-- `/setmodel <id>`: Mengganti model AI aktif secara langsung tanpa redeploy.
-- `/usage`: Melihat statistik token, panggilan HTTP, dan estimasi kuota Neurons harian.
-- `/setlimit <n>`: Mengatur batas chat harian pengguna umum (`0` = unlimited).
-- `/getlimit`: Memeriksa pengaturan batas chat harian yang sedang aktif.
-- `/preview`: Melihat draf rangkuman berita hari ini tanpa mengirim ke channel.
-- `/post_now`: Memposting digest berita ke channel secara langsung saat itu juga.
-- `/stop_posting` & `/resume_posting`: Menghentikan sementara atau mengaktifkan kembali jadwal posting otomatis jam 18:00 WIB.
-- `/unlock_today`: Membuka kunci proteksi satu kali posting per hari.
-- `/search <kata_kunci>`: Mencari arsip berita yang tersimpan di Cloudflare KV.
-- `/addnews <judul> | <url> | <ringkasan>`: Menyuntikkan berita penting manual ke digest berikutnya.
-- `/logs`: Menampilkan log audit aktivitas sistem.
+- /start: Pesan pembuka dengan info channel dan sisa kuota chat harian.
+- /help: Panduan singkat cara ngobrol, baca berita, dan bikin pengingat.
+- /news: Menghasilkan rangkuman berita AI terhangat secara instan.
+- /reset atau /clearchat: Membersihkan riwayat percakapan sesi ini.
+- /remind <waktu> <pesan>: Bikin pengingat sekali jalan (contoh: /remind 15m Minum air).
+- /myreminders: Menampilkan daftar pengingat aktif milikmu.
+- /delremind <id>: Membatalkan jadwal pengingat.
+
+### Perintah Admin
+
+- /dashboard_code: Menghasilkan kode OTP 6-digit untuk login ke dashboard web (aktif 5 menit).
+- /connectors: Melihat status konektor Blogger dan webhook.
+- /models: Menampilkan daftar model AI Cloudflare dan provider cadangan.
+- /setmodel <id>: Mengganti model AI aktif langsung dari chat.
+- /usage: Menampilkan statistik token, panggilan HTTP, dan estimasi kuota Neurons Cloudflare.
+- /setlimit <n>: Mengatur batas chat harian pengguna umum (0 untuk mematikan batas).
+- /getlimit: Memeriksa setelan batas chat harian saat ini.
+- /preview: Membuat draf berita hari ini tanpa diposting ke channel.
+- /post_now: Langsung memposting berita hari ini ke channel saat itu juga.
+- /stop_posting dan /resume_posting: Menghentikan sementara atau mengaktifkan kembali jadwal posting otomatis jam 18:00 WIB.
+- /unlock_today: Membuka kunci proteksi satu kali kirim per hari.
+- /search <kata_kunci>: Mencari arsip berita yang tersimpan di KV.
+- /addnews <judul> | <url> | <ringkasan>: Memasukkan berita manual ke digest berikutnya.
+- /logs: Melihat riwayat log audit sistem.
 
 ---
 
-## 🚀 Panduan Menjalankan & Deploy
+## Panduan Instalasi dan Deployment
 
 ### 1. Prasyarat
-- [Node.js](https://nodejs.org/) (versi 18 ke atas).
-- Akun [Cloudflare](https://dash.cloudflare.com/) dengan fitur Workers & KV aktif.
-- Token bot Telegram dari [@BotFather](https://t.me/BotFather).
 
-### 2. Kloning & Instalasi Dependensi
+- Node.js (versi 18 ke atas).
+- Akun Cloudflare dengan fitur Workers dan KV aktif.
+- Token bot Telegram dari @BotFather.
+
+### 2. Kloning dan Install
+
 ```bash
 git clone https://github.com/muhamadalfian20892/TechnokersThing.git
 cd TechnokersThing
 npm install
 ```
 
-### 3. Konfigurasi Variabel Rahasia (.dev.vars)
-Buat berkas `.dev.vars` untuk pengembangan lokal:
+### 3. File Environment Lokal
+
+Buat file `.dev.vars` di folder utama projek:
+
 ```env
-TELEGRAM_TOKEN=token_bot_telegram_anda
-CHANNEL_ID=@username_channel_anda
+TELEGRAM_TOKEN=token_bot_telegram_kamu
+CHANNEL_ID=@username_channel_kamu
 BACKUP_AI_URL=https://api.openai.com/v1
-BACKUP_AI_KEY=api_key_backup_anda
-TELEGRAM_WEBHOOK_SECRET=token_rahasia_webhook_opsional
+BACKUP_AI_KEY=api_key_backup_kamu
+TELEGRAM_WEBHOOK_SECRET=token_rahasia_webhook_kamu
 ```
 
-### 4. Menjalankan Server Lokal (Local Development)
+### 4. Menjalankan di Lokal
+
 ```bash
 npm run dev
 # atau
 npx wrangler dev
 ```
 
-### 5. Verifikasi Tipe & Simulasi Komprehensif
+### 5. Typecheck dan Simulasi
+
 ```bash
-# Uji kompilasi TypeScript
+# Cek tipe data TypeScript
 npx tsc --noEmit
 
-# Jalankan pengujian simulasi multi-persona (6 zona pengujian)
+# Jalankan simulasi pengujian 6 zona
 npx tsx scratch/simulate_all_personas.mjs
 ```
 
-### 6. Melakukan Deploy ke Cloudflare Workers
+### 6. Deploy ke Cloudflare
+
 ```bash
 npm run deploy
 # atau
@@ -208,25 +202,24 @@ npx wrangler deploy
 ```
 
 Setelah berhasil di-deploy, pasang webhook Telegram dengan membuka URL:
+
 ```
-https://<nama-worker-anda>.workers.dev/telegram/set-webhook
+https://<subdomain-worker-kamu>.workers.dev/telegram/set-webhook
 ```
-*(Memerlukan sesi login di Web Dashboard atau kredensial admin).*
 
 ---
 
-## ♿ Standar Aksesibilitas (WCAG 2.1 AAA)
+## Aksesibilitas (WCAG 2.1 AAA)
 
-Aksesibilitas adalah prioritas utama dalam perancangan Technokers AI Bot Pro:
-- **Kontras Warna Tinggi**: Teks `#ffffff` di atas latar belakang `#080d1a` menghasilkan rasio kontras **17.9:1** (jauh di atas batas minimum AAA yaitu 7:1).
-- **Indikator Fokus Jelas**: Outline navigasi keyboard menggunakan warna biru terang (`3px solid #60a5fa`) dengan jarak `3px`.
-- **Skip Links**: Pengguna pembaca layar dapat langsung melompat ke konten utama menggunakan navigasi tautan loncat.
-- **Dukungan Pembaca Layar**: Setiap pesan suara yang masuk otomatis ditranskripsikan ke dalam teks kutipan di Telegram dan dashboard web agar konten audio selalu dapat diakses secara visual maupun auditori.
+Aksesibilitas dirancang sejak awal:
+
+- Kontras Tinggi: Teks putih (#ffffff) di atas latar biru gelap (#080d1a) menghasilkan rasio kontras 17.9:1, jauh di atas batas minimum AAA yaitu 7:1.
+- Fokus Keyboard: Garis tepi fokus menggunakan outline tebal 3px solid #60a5fa dengan offset 3px.
+- Skip Link: Tersedia tautan lompat agar pengguna keyboard bisa langsung menuju konten utama.
+- Transkrip Teks: Pesan suara otomatis menampilkan transkripsi teks di Telegram dan log dashboard agar isi rekaman selalu bisa dibaca.
 
 ---
 
-## 📄 Lisensi
+## Lisensi
 
-Projek ini dilisensikan di bawah **MIT License**. Anda bebas menggunakan, memodifikasi, dan mendistribusikannya untuk keperluan pribadi maupun komunitas.
-
-Jika projek ini bermanfaat bagi Anda, jangan lupa berikan bintang ⭐️ di [GitHub](https://github.com/muhamadalfian20892/TechnokersThing) dan mari bergabung di channel komunitas kami di **[@aicomindo](https://t.me/aicomindo)**!
+Projek ini dirilis di bawah lisensi MIT License. Kamu bebas menggunakan, mengubah, dan membagikannya sesuai kebutuhan.

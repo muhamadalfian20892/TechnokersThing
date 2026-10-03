@@ -1,93 +1,76 @@
-# Technokers AI Bot Pro (`TechnokersThing`)
+# Technokers AI Bot Pro (TechnokersThing)
 
-> 🌐 **Language / Bahasa:**  
-> **English** | 🇮🇩 [Baca Dokumentasi Bahasa Indonesia di sini (README_ID.md)](README_ID.md)
+[Indonesian Version (README_ID.md)](README_ID.md)
 
-An open-source, enterprise-grade multimodal Telegram AI Assistant and automated Tech News Publisher built completely on **Cloudflare Workers**, **Workers AI**, **Cloudflare KV**, and **Telegram Bot API**, with a **WCAG 2.1 AAA** accessible administration dashboard.
+Hey, I'm Alfian ([@alfian04121](https://t.me/alfian04121) on Telegram, [GitHub](https://github.com/muhamadalfian20892)).
 
-Created and maintained with ❤️ by **[Muhamad Alfian](https://github.com/muhamadalfian20892)** ([@alfian04121](https://t.me/alfian04121)).
+I built this project because I run an Indonesian tech community channel called AI Community News Indonesia (@aicomindo). Every evening at around 18:00 WIB, I wanted our community to get a solid, curated recap of the day's artificial intelligence and tech news without having to pay for a 24/7 VPS that sits idle most of the day. Cloudflare Workers was the natural fit: it runs on the edge, cold-starts in milliseconds, and has built-in access to Workers AI with models like Llama 3.3 and Whisper.
 
----
+Over time, the bot evolved quite a bit. People wanted to chat with it directly, ask coding questions, and send voice messages from their phones on the go. I also got tired of AI bots that sound like stiff customer service reps reciting canned disclaimers, so I gave this bot two distinct personalities: a conversational chat mode that talks like a real person, and a news mode that explains complex tech simply and highlights why it matters.
 
-## 👨‍💻 Meet the Creator & Project Story
-
-Hi there! I'm **Muhamad Alfian** ([@alfian04121](https://t.me/alfian04121) on Telegram, [`muhamadalfian20892`](https://github.com/muhamadalfian20892) on GitHub).
-
-This project started with a simple, personal itch: I run the Indonesian tech community channel **[@aicomindo](https://t.me/aicomindo)** (*AI Community News Indonesia*). Every evening at 18:00 WIB, I wanted our community to receive a thoughtfully curated, deeply engaging summary of the biggest breakthroughs in artificial intelligence, semiconductor tech, and open-source models—without requiring a heavy 24/7 server running on AWS or a VPS.
-
-Cloudflare Workers was the natural answer: zero idle server costs, sub-millisecond cold starts across 330+ edge locations worldwide, and direct access to Cloudflare Workers AI with Llama 3.3 and DeepSeek R1 models right inside the worker pipeline.
-
-Over time, this bot grew far beyond a simple daily broadcaster:
-1. **Interactive Multimodal Assistant**: Community members wanted to chat with it, ask coding questions, brainstorm tech concepts, and even send **voice notes** from Telegram on their commute.
-2. **True Persona Intelligence**: I noticed early AI bots felt like stiff, corporate customer service reps. I redesigned this bot with two crisp personalities—a friendly, conversational **CHAT MODE** that talks like a real person, and a structured, jargon-free **NEWS MODE** that tells fascinating stories about technology.
-3. **Open-Source For Everyone**: I didn't want any developer or admin identities hardcoded in the codebase. Now anyone can clone this repository, drop their own Telegram ID and channel into [`bot.config.json`](bot.config.json), and deploy their own customized AI bot in minutes.
+Since this project is open source, none of my personal details or admin IDs are hardcoded anymore. Everything lives in `bot.config.json`, so you can fork this repository, adjust the config for your own community or personal assistant, and deploy it to Cloudflare in a few minutes.
 
 ---
 
-## 📜 Developer Changelog & Update Log
+## Update Log
 
-Here are the latest developer logs and improvements made to the project:
+New on 10/04/2026:
+	Though it took quite a bit of tracking down, the annoying bug where the bot kept saying "Halo Muhamad" at the beginning of literally every single reply has been completely resolved. The bot now understands conversational flow and talks like a normal human being rather than greeting you repeatedly on every message.
+	Added the context-aware persona engine. The bot now inspects who is sending the message: if it recognizes the developer/admin, it acts like a knowledgeable, personal dev assistant ready to debug or run tasks. If it is talking to a regular user, it stays helpful and approachable while keeping internal tokens and admin functions strictly protected.
+	Extracted all admin identities, usernames, bot names, and channel targets out of the codebase and into bot.config.json. You can also override any of them through Cloudflare environment variables, so nothing is hardcoded anymore.
+	Fixed a crash where callBackupOpenAi threw a TypeError trying to call .replace() on an undefined backup URL if credentials were not set. It now validates credentials cleanly and fails gracefully.
+	Added validation for Telegram's X-Telegram-Bot-Api-Secret-Token header on the webhook endpoint. Unauthorized requests pretending to be Telegram now get a 403 Forbidden right away.
+	Protected /addnews against SSRF attacks. Attempting to pass internal or loopback addresses like 127.0.0.1, localhost, or 169.254.169.254 is now rejected.
+	Moved /api/trigger-news, /api/preview-news, and /telegram/set-webhook behind the dashboard session authentication so unauthenticated visitors cannot trigger posts or drain your AI tokens.
+	Added secret leak sanitization to scrub TELEGRAM_TOKEN, BACKUP_AI_KEY, or webhook secrets from outgoing AI responses in case of prompt injection attempts.
 
-### New on 10/04/2026:
-* Though it took quite a bit of tracking down, the annoying bug where the bot kept saying *"Halo Muhamad"* at the beginning of literally every single reply—even five turns deep into a conversation—has been completely eradicated. The bot now understands conversational continuity and greets you like a real friend rather than a robotic receptionist resetting on every query.
-* Implemented the **Context-Aware Persona Engine** (`buildContextAwareSystemPersona`). The bot now inspects who is sending the message: if it recognizes the creator/admin (matching `ADMIN_USER_ID` or `ADMIN_USERNAME`), it acts as a trusted, savvy developer partner ready to debug or execute operations. If talking to community members, it stays warm and informative while strictly protecting internal system secrets.
-* Decoupled all admin and identity variables into [`bot.config.json`](bot.config.json) and exported [`getAppConfig`](src/config.ts). No more hardcoded user IDs, admin usernames, or channel names across the codebase—you can fork this project and easily customize your own bot.
-* Discovered a subtle crash in `callBackupOpenAi` where calling `.replace()` on an undefined backup URL would throw a `TypeError`. We added defensive checks so missing backup credentials fail gracefully with descriptive error logs instead of terminating the worker.
-* Added verification for Telegram's `X-Telegram-Bot-Api-Secret-Token` header on `/telegram/webhook`. If anyone tries to spoof webhook updates or probe your endpoints without the configured secret, they are immediately stopped with a `403 Forbidden`.
-* Hardened `/addnews` against SSRF (Server-Side Request Forgery). Attempting to submit loopback, private RFC-1918 IPs, or AWS metadata endpoints (`127.0.0.1`, `localhost`, `169.254.169.254`) is now strictly rejected.
-* Moved `/api/trigger-news`, `/api/preview-news`, and `/telegram/set-webhook` behind the authenticated dashboard session guard. Unauthenticated visitors now receive `401 Unauthorized` instead of being able to drain your AI quotas.
-* Added `sanitizeSecretLeaks` to inspect outgoing LLM responses and redact any accidental leaks of `TELEGRAM_TOKEN`, `BACKUP_AI_KEY`, or webhook secrets into `[REDACTED_SECRET]`.
+New on 10/03/2026:
+	Group chats are no longer chaotic. If the bot is added to a group with privacy mode turned off, it used to try to answer every random message between members. It now stays quiet unless someone mentions its username, replies directly to it, or runs a command.
+	Bot username mentions are now stripped from commands and conversational queries, so the underlying model receives clean prompts without trailing bot tags.
+	Added voice note support. Audio messages sent in Telegram are downloaded and transcribed using Cloudflare Workers AI Whisper with a dual-engine fallback.
+	Audio files larger than 20 MB are now caught early and rejected with a helpful message instead of timing out during download.
+	Voice message replies quote the recognized transcript text first so users and screen readers can verify what the model heard before reading the response.
 
-### New on 10/03/2026:
-* Group chats are no longer a chaotic mess! Previously, if the bot was added to a group with privacy mode disabled, it would try to answer every random message between members. It now politely ignores passive banter and only responds when explicitly mentioned (`@bot_username`), replied to, or sent a command.
-* Mention tokens like `@bot_username` are now automatically stripped from commands (e.g. `/news@my_bot` -> `/news`) and conversational queries, so the underlying LLM receives clean, human prompts.
-* Voice notes and audio messages (`.ogg`, `.opus`, `.mp3`) sent in Telegram are now automatically transcribed using Cloudflare Workers AI Whisper (`@cf/openai/whisper` & `@cf/openai/whisper-large-v3-turbo`) with a dual-engine fallback system.
-* Audio files exceeding 20 MB (Telegram Bot API download limit) are now cleanly rejected with a helpful message instead of failing halfway through download.
-* Transcriptions are displayed in the Telegram reply as an accessible quote block (`"..."`) so screen readers and users can verify what the model heard before reading the AI's reply.
+New on 10/02/2026:
+	Added universal connectors to syndicate daily news digests to Google Blogger blogs and custom external webhooks.
+	Added natural language intent detection for connectors, so admins can simply type "sambungin ke blogger" in chat to configure things.
+	Implemented 6-digit OTP login for the web dashboard. Admins can generate a code in Telegram using /dashboard_code that expires in 5 minutes and works once.
+	Added brute-force lockout: three failed OTP attempts lock out the client IP for 15 minutes and immediately burn the code.
 
-### New on 10/02/2026:
-* Built the **Universal Connectors** engine. The bot can now syndicate daily tech digests directly to Google Blogger blogs or dispatch webhooks to custom external APIs.
-* Added natural language intent extraction for connectors—admins can literally say *"sambungin ke blogger"* in chat to be guided through the setup.
-* Implemented single-use **6-digit OTP authentication** for the Web Dashboard. Admins can generate a code in Telegram using `/dashboard_code`, valid for 5 minutes.
-* Added brute-force lockout: after 3 failed OTP attempts, the client IP is banned from login attempts for 15 minutes and the code is immediately invalidated.
+New on 10/01/2026:
+	Overhauled the web dashboard to meet WCAG 2.1 Level AAA accessibility guidelines.
+	Adjusted the color palette so text contrast sits at 17.9:1, well above the 7:1 AAA requirement.
+	Added thick 3px visible focus rings for keyboard users, semantic landmark roles, skip links, and ensured all clickable controls meet the 44x44px minimum touch target size.
 
-### New on 10/01/2026:
-* Re-engineered the Web Dashboard to comply strictly with **WCAG 2.1 Level AAA** accessibility standards.
-* Raised text contrast ratios up to **17.9:1** (`#ffffff` on `#080d1a`), far exceeding the AAA 7:1 minimum requirement.
-* Added prominent `3px` visible focus outlines for full keyboard navigability, explicit ARIA landmark roles (`role="main"`, `aria-live="polite"`), and `<a class="skip-link">` buttons.
-* Ensured every clickable button and interactive input meets the minimum touch target size of 44x44px.
+New on 09/28/2026:
+	Added an autonomous reminder and cron scheduler. You can say things like "ingetin aku 15 menit lagi angkat jemuran" or "ingetin meeting besok jam 9 pagi", and the bot figures out the timestamp and saves it to KV.
+	Supported recurring cron jobs via /cron 0 9 * * * Minum air or conversational prompts like "tiap hari jam 8 pagi cek server".
+	Supported routing reminders to private chats, the official channel, or dashboard notifications.
 
-### New on 09/28/2026:
-* Integrated the **Autonomous Scheduler & Reminder System**. Users can say natural phrases like *"ingetin aku 15 menit lagi angkat jemuran"* or *"ingetin meeting besok jam 09:00"*, and the AI will extract the time, calculate WIB offsets, and schedule a reminder.
-* Supported recurring cron jobs via `/cron 0 9 * * * Minum air pagi` as well as conversational crons (*"tiap hari jam 8 pagi cek server"*).
-* Added target routing: reminders can be delivered right back to the Telegram chat, sent to the official channel (admin only), or pushed as web notifications on the dashboard.
-
-### New on 09/25/2026:
-* Initial launch of the serverless daily news synthesizer on Cloudflare Workers edge.
-* Integrated Cron Triggers (`0 11 * * *` UTC / 18:00 WIB) with deduplication locks in Cloudflare KV to ensure only one comprehensive digest is posted per day.
-* Set up dual AI providers: primary on Cloudflare Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) with seamless failover to an OpenAI-compatible backup provider if daily neuron limits are reached.
+New on 09/25/2026:
+	Initial release of the daily news synthesizer running on Cloudflare Workers edge.
+	Set up cron triggers at 11:00 UTC (18:00 WIB) with KV locks to prevent duplicate postings.
+	Configured Workers AI with Llama 3.3 as the primary model and an OpenAI-compatible endpoint as an automatic fallback if daily limits are reached.
 
 ---
 
-## 🌟 Key Features
+## Features
 
-| Feature | Description |
-|---|---|
-| 🎙️ **Voice Notes & Audio STT** | Send voice messages in Telegram or record directly in the web dashboard. Automatically transcribed by Whisper with accessible confirmation quotes. |
-| 🧠 **Context-Aware Persona** | Detects creator/developer vs community member. Responds casually and technically to the admin, and helpfully to users while protecting system tokens. |
-| 💬 **Natural CHAT vs NEWS Modes** | CHAT MODE speaks naturally like a human without customer-service cliches. NEWS MODE crafts catchy, jargon-free stories with *"Mengapa ini menarik?"* context. |
-| 🛡️ **Enterprise Security** | Webhook secret token validation, SSRF URL filters, prompt-injection token sanitization, and 3-attempt OTP lockout. |
-| 👥 **Smart Group Chat Filtering** | Ignores passive chatter between group members. Only responds when mentioned (`@bot`), replied to, or given commands. |
-| ⏰ **Autonomous Reminders & Crons** | Natural language reminder scheduling (*"ingetin aku 20 menit lagi"*), cron job parsing, and multi-platform delivery (Telegram, Channel, Web). |
-| ♿ **WCAG 2.1 AAA Web Dashboard** | Complete management console with 17.9:1 contrast ratio, keyboard navigation, skip links, and touch-friendly controls. |
-| 🔌 **Universal Connectors** | Syndicates daily digests to Google Blogger blogs and external webhook endpoints. |
-| ⚙️ **Open Source & Configurable** | All admin credentials, limits, and bot names live in [`bot.config.json`](bot.config.json) or worker environment variables. |
+- Voice Messages and Audio Transcription: Accepts voice notes (.ogg, .opus, .mp3) on Telegram or recorded in the dashboard. Audio is transcribed via Whisper, and the text transcript is quoted in the reply for transparency.
+- Context-Aware Persona Detection: Automatically recognizes whether it is chatting with the admin or a community member. Responds informally and technically to the admin, and warmly to regular members while protecting system secrets.
+- Natural Chat and News Modes: Chat mode uses normal, conversational Indonesian without robotic greetings or stiff corporate phrases. News mode structures summaries cleanly with an explanation of why the development matters and relevant hashtags.
+- Group Chat Filtering: Ignores passive chatter between group members. Only responds when explicitly tagged, replied to, or given a slash command.
+- Security Hardening: Validates Telegram webhook secret tokens, blocks SSRF attempts on internal IP ranges, sanitizes AI responses against token leaks, and enforces OTP brute-force lockouts.
+- Reminders and Cron Jobs: Understands natural Indonesian time expressions to schedule reminders, supports standard 5-field cron patterns, and delivers notifications on time.
+- WCAG 2.1 AAA Accessible Dashboard: Management dashboard built with a high-contrast dark palette (17.9:1 ratio), visible focus outlines, skip links, and full keyboard accessibility.
+- Universal Connectors: Automatically syndicates daily digests to Google Blogger blogs or external webhooks.
+- Clean Open-Source Configuration: All identities, channel handles, and limits are managed in `bot.config.json` or worker environment variables.
 
 ---
 
-## ⚙️ Configuration & Customization (`bot.config.json`)
+## Configuration (bot.config.json)
 
-The bot is designed to be completely open-source and customizable. All parameters are centralized in [`bot.config.json`](bot.config.json):
+All bot identities and limits are stored in `bot.config.json` at the root of the project:
 
 ```json
 {
@@ -119,114 +102,124 @@ The bot is designed to be completely open-source and customizable. All parameter
 ```
 
 ### Environment Variable Overrides
-You can override any setting using Cloudflare Worker variables in `wrangler.jsonc` or `.dev.vars`:
-- `ADMIN_USER_ID`: Numeric Telegram user ID of the admin.
-- `ADMIN_USERNAME`: Telegram username (with or without `@`).
-- `ADMIN_NAME`: Display name of the admin.
-- `BOT_NAME`: Name of your bot.
-- `BOT_USERNAME`: Username of the bot.
-- `CHANNEL_ID`: Channel ID (e.g., `@mychannel`).
-- `DEFAULT_DAILY_LIMIT`: Maximum chats per non-admin user per day (`0` for unlimited).
-- `TELEGRAM_WEBHOOK_SECRET`: Secret token for `X-Telegram-Bot-Api-Secret-Token` validation.
+
+If you prefer to configure the bot via Cloudflare Worker environment variables in `wrangler.jsonc` or `.dev.vars`, you can set:
+
+- ADMIN_USER_ID: Your numeric Telegram user ID.
+- ADMIN_USERNAME: Your Telegram username (without @).
+- ADMIN_NAME: Your display name.
+- BOT_NAME: The name of your bot.
+- BOT_USERNAME: Your bot's Telegram handle.
+- CHANNEL_ID: The target Telegram channel (e.g. @yourchannel).
+- DEFAULT_DAILY_LIMIT: Daily chat quota per non-admin user (set to 0 for unlimited).
+- TELEGRAM_WEBHOOK_SECRET: Secret token for webhook verification.
 
 ---
 
-## 📱 Bot Commands Reference
+## Commands
 
-### Public Commands (All Users)
-- `/start`: Welcome message with community links and active quota information.
-- `/help`: Guide on how to ask questions, read news, and set reminders.
-- `/news`: Instantly generates and delivers the latest AI news digest.
-- `/reset` or `/clearchat`: Clears your isolated chat memory for a fresh conversation.
-- `/remind <time> <message>`: Creates a one-time reminder (e.g. `/remind 15m Minum air`).
-- `/myreminders`: Displays your active scheduled reminders.
-- `/delremind <id>`: Cancels an active reminder.
+### Public Commands
 
-### Admin-Only Commands
-- `/dashboard_code`: Generates a single-use 6-digit OTP to log into the Web Dashboard (valid 5 min).
-- `/connectors`: Checks status of Blogger, Gmail, and Webhook syndication.
-- `/models`: Lists available Cloudflare Workers AI and backup OpenAI models.
-- `/setmodel <id>`: Changes the active model on the fly.
-- `/usage`: Displays token metrics, HTTP requests, and daily Cloudflare Neurons quota.
-- `/setlimit <n>`: Updates daily chat limits for regular users (`0` = unlimited).
-- `/getlimit`: Inspects the current daily user limit.
-- `/preview`: Generates a live draft of today's news digest without publishing.
-- `/post_now`: Manually broadcasts the daily digest to the channel immediately.
-- `/stop_posting` & `/resume_posting`: Pauses or resumes the automatic 18:00 WIB cron publisher.
-- `/unlock_today`: Unlocks the one-post-per-day restriction.
-- `/search <query>`: Searches KV archives for previously posted news.
-- `/addnews <title> | <url> | <snippet>`: Manually injects breaking news into the next digest.
-- `/logs`: Displays system audit logs.
+- /start: Welcome message with channel links and active quota information.
+- /help: Instructions on asking questions, reading news, and setting reminders.
+- /news: Generates and returns a fresh digest of the latest tech news.
+- /reset or /clearchat: Clears your conversation history for a fresh topic.
+- /remind <time> <message>: Sets a one-time reminder (e.g. /remind 15m Minum air).
+- /myreminders: Lists your active scheduled reminders.
+- /delremind <id>: Cancels a reminder.
+
+### Admin Commands
+
+- /dashboard_code: Generates a single-use 6-digit OTP to log into the web dashboard (valid for 5 minutes).
+- /connectors: Checks the status of Blogger and webhook syndication.
+- /models: Lists available Cloudflare and backup AI models.
+- /setmodel <id>: Changes the active model on the fly.
+- /usage: Displays token statistics, request counts, and estimated Cloudflare Neurons usage.
+- /setlimit <n>: Updates the daily chat limit for non-admin users (0 to disable).
+- /getlimit: Checks the current daily chat limit setting.
+- /preview: Generates a draft of today's digest without posting it to the channel.
+- /post_now: Immediately generates and posts today's digest to the channel.
+- /stop_posting and /resume_posting: Pauses or resumes the daily 18:00 WIB cron publisher.
+- /unlock_today: Unlocks the daily one-post restriction if you need to re-post.
+- /search <query>: Searches previously posted news in KV storage.
+- /addnews <title> | <url> | <snippet>: Manually injects a news item into the next digest.
+- /logs: Shows recent audit logs.
 
 ---
 
-## 🚀 Quickstart & Deployment
+## Setup and Deployment
 
-### 1. Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or newer).
-- [Cloudflare Account](https://dash.cloudflare.com/) with Workers & KV enabled.
-- Telegram Bot Token from [@BotFather](https://t.me/BotFather).
+### 1. Requirements
 
-### 2. Clone & Install
+- Node.js (version 18 or newer).
+- A Cloudflare account with Workers and KV enabled.
+- A Telegram Bot token from @BotFather.
+
+### 2. Installation
+
 ```bash
 git clone https://github.com/muhamadalfian20892/TechnokersThing.git
 cd TechnokersThing
 npm install
 ```
 
-### 3. Configure Secrets
-Create a `.dev.vars` file for local development:
+### 3. Local Environment
+
+Create a `.dev.vars` file in the project root:
+
 ```env
 TELEGRAM_TOKEN=your_telegram_bot_token
 CHANNEL_ID=@your_channel_username
 BACKUP_AI_URL=https://api.openai.com/v1
 BACKUP_AI_KEY=your_backup_api_key
-TELEGRAM_WEBHOOK_SECRET=your_optional_webhook_secret
+TELEGRAM_WEBHOOK_SECRET=your_webhook_secret
 ```
 
-### 4. Local Development
+### 4. Running Locally
+
 ```bash
 npm run dev
 # or
 npx wrangler dev
 ```
 
-### 5. Typecheck & Automated Simulations
+### 5. Typecheck and Tests
+
 ```bash
-# Verify TypeScript types
+# Check TypeScript types
 npx tsc --noEmit
 
-# Run comprehensive 6-suite simulation test
+# Run the 6-suite simulation test
 npx tsx scratch/simulate_all_personas.mjs
 ```
 
-### 6. Deploy to Cloudflare Workers
+### 6. Deploying to Cloudflare
+
 ```bash
 npm run deploy
 # or
 npx wrangler deploy
 ```
 
-Once deployed, set your Telegram webhook by visiting:
+Once deployed, set up your webhook by opening:
+
 ```
-https://<your-worker>.workers.dev/telegram/set-webhook
+https://<your-worker-subdomain>.workers.dev/telegram/set-webhook
 ```
-*(Requires being logged into the dashboard or using your admin credentials).*
 
 ---
 
-## ♿ Accessibility (WCAG 2.1 AAA)
+## Accessibility (WCAG 2.1 AAA)
 
-Technokers AI Bot Pro was built with accessibility as a first-class citizen:
-- **Enhanced Contrast**: Background `#080d1a`, text `#ffffff` yields a contrast ratio of **17.9:1** (far above the AAA requirement of 7:1).
-- **Visible Focus**: Keyboard focus rings use high-contrast blue (`3px solid #60a5fa`) with `3px` offset.
-- **Skip Links**: Accessible keyboard users can jump straight to main content with the skip link banner.
-- **Screen Reader Support**: Audio messages automatically transcribe and print text transcripts directly in Telegram and dashboard logs so speech content is always readable.
+Accessibility was considered from the start:
+
+- Enhanced Contrast: Text is pure white (#ffffff) on dark navy (#080d1a), giving a 17.9:1 contrast ratio that exceeds the AAA requirement of 7:1.
+- Visible Focus: Keyboard focus outlines use a bold 3px solid #60a5fa outline with a 3px offset.
+- Skip Links: Includes skip navigation links so keyboard users can jump past headers straight to main content.
+- Screen Reader Transcripts: Voice notes automatically include the transcribed text in the Telegram message and dashboard log, ensuring all audio content is accessible as text.
 
 ---
 
-## 📄 License
+## License
 
-This project is licensed under the **MIT License**. Feel free to use, modify, and distribute it for personal or community projects.
-
-If you enjoy this project or use it in your community, give it a ⭐️ on [GitHub](https://github.com/muhamadalfian20892/TechnokersThing) and join our community at **[@aicomindo](https://t.me/aicomindo)**!
+This project is released under the MIT License. You are free to use, modify, and distribute it as you like.
