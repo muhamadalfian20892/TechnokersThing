@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "userId": "1023972475",
+    "username": "alfian04121",
+    "name": "Muhamad Alfian",
+    "roleTitle": "Creator & Lead Developer"
+  },
+  "bot": {
+    "name": "Technokers AI Assistant",
+    "username": "tckn_bot",
+    "channelId": "@aicomindo",
+    "channelName": "AI Community News Indonesia"
+  },
+  "limits": {
+    "defaultDailyUserChatLimit": 20,
+    "rateLimitPerMinute": 25,
+    "maxAudioSizeBytes": 20971520,
+    "otpExpirationSeconds": 300,
+    "otpMaxFailedAttempts": 3
+  },
+  "features": {
+    "enableVoiceTranscriptions": true,
+    "enableSchedulerTools": true,
+    "enableConnectors": true
+  }
+}

@@ -51,9 +51,9 @@ import {
 import { parseScheduleInput } from '../scheduler/parser';
 import { ScheduledJob } from '../scheduler/types';
 import { ChatMessage } from '../news/types';
-import { stripEmojis, escapeHtml } from '../utils/text';
+import { stripEmojis, escapeHtml, isValidPublicHttpUrl, sanitizeSecretLeaks } from '../utils/text';
 import { transcribeAudio } from '../news/transcriber';
-import { BOT_SYSTEM_INSTRUCTION } from '../news/prompts';
+import { getAppConfig, buildContextAwareSystemPersona } from '../config';
 
 export interface TelegramVoice {
   file_id: string;
@@ -97,6 +97,7 @@ export interface TelegramUpdate {
     caption?: string;
     voice?: TelegramVoice;
     audio?: TelegramAudio;
+    reply_to_message?: any;
   };
 }
 
@@ -107,12 +108,44 @@ export async function handleTelegramUpdate(
   const msg = update.message;
   if (!msg) return;
 
+  const config = getAppConfig(env);
   const chatId = msg.chat.id;
   const userId = msg.from?.id || chatId;
   const threadId = msg.message_thread_id;
   const userName = msg.from?.first_name || 'Teman';
   const userHandle = msg.from?.username ? `@${msg.from.username}` : '';
   const token = env.TELEGRAM_TOKEN;
+  const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+  const botUsername = config.bot.username.toLowerCase();
+
+  let rawText = msg.text ? msg.text.trim() : (msg.caption ? msg.caption.trim() : '');
+  const voice = msg.voice;
+  const audio = msg.audio;
+  const hasVoice = !!(voice || audio);
+
+  // Group filter: Only respond if mentioned, replied to, or if it's a bot command
+  if (isGroup) {
+    const isCommand = rawText.startsWith('/');
+    const isReplyToBot =
+      msg.reply_to_message?.from?.is_bot === true ||
+      (!!msg.reply_to_message?.from?.username &&
+        msg.reply_to_message.from.username.toLowerCase() === botUsername);
+    const mentionsBot = botUsername ? rawText.toLowerCase().includes(`@${botUsername}`) : false;
+
+    // If it's a voice message in group, must be replying to bot or explicitly mentioning bot
+    if (hasVoice && !isReplyToBot && !mentionsBot) {
+      return;
+    }
+
+    if (!isCommand && !isReplyToBot && !mentionsBot) {
+      return; // Passive conversation between group members, ignore to prevent spam
+    }
+
+    // Clean @bot_username from command or query
+    if (botUsername) {
+      rawText = rawText.replace(new RegExp(`@${config.bot.username}\\b`, 'gi'), '').trim();
+    }
+  }
 
   try {
     // Track profile and isolated session key per user and per thread
@@ -125,7 +158,7 @@ export async function handleTelegramUpdate(
     const sessionKey = buildChatSessionKey(chatId, userId, threadId);
 
     // Rate Limiting Protection (Anti-Flood)
-    const rateLimit = await checkRateLimit(env.AI_NEWS_KV, userId, 25);
+    const rateLimit = await checkRateLimit(env.AI_NEWS_KV, userId, config.limits.rateLimitPerMinute);
     if (!rateLimit.allowed) {
       await sendTelegramMessage(
         token,
@@ -135,14 +168,8 @@ export async function handleTelegramUpdate(
       return;
     }
 
-    const userIsAdmin = await isUserAdmin(env.AI_NEWS_KV, userId);
+    const userIsAdmin = await isUserAdmin(env.AI_NEWS_KV, userId, env);
     const { dateStr, formattedDate, isFriday } = getWibInfo();
-
-    // Voice message detection and audio speech-to-text processing
-    const voice = msg.voice;
-    const audio = msg.audio;
-    const hasVoice = !!(voice || audio);
-    let rawText = msg.text ? msg.text.trim() : (msg.caption ? msg.caption.trim() : '');
 
     // If message has neither text nor voice/audio (e.g. sticker, photo without caption, etc.)
     if (!rawText && !hasVoice) {
@@ -150,7 +177,7 @@ export async function handleTelegramUpdate(
         await sendTelegramMessage(
           token,
           chatId,
-          `<b>Technokers AI Bot</b> menerima pesan teks dan rekaman pesan suara (voice message).\n\n` +
+          `<b>${config.bot.name}</b> menerima pesan teks dan rekaman pesan suara (voice message).\n\n` +
             `Silakan ketik pertanyaan Anda atau kirimkan pesan suara (voice note) untuk bertanya seputar kecerdasan buatan, teknologi, dan pemrograman!`
         );
       }
@@ -170,20 +197,22 @@ export async function handleTelegramUpdate(
         `<b>Batas Chat Harian Tercapai (${quotaCheck.count}/${quotaCheck.limit})</b>\n\n` +
           `Anda telah menggunakan seluruh kuota chat (${quotaCheck.limit} pesan) untuk hari ini.\n` +
           `Kuota akan direset kembali besok pada pukul 00:00 WIB.\n\n` +
-          `Tetap ikuti perkembangan berita AI terlengkap di channel <a href="https://t.me/aicomindo">@aicomindo</a>!`
+          `Tetap ikuti perkembangan berita AI terlengkap di channel ${config.bot.channelName || config.bot.channelId}!`
       );
       return;
     }
 
     const audioObj = voice || audio!;
     const fileSize = audioObj.file_size || 0;
+    const maxAudioBytes = config.limits.maxAudioSizeBytes || 20 * 1024 * 1024;
 
     // Telegram Bot API limit is 20MB
-    if (fileSize > 20 * 1024 * 1024) {
+    if (fileSize > maxAudioBytes) {
+      const maxMb = Math.round(maxAudioBytes / (1024 * 1024));
       await sendTelegramMessage(
         token,
         chatId,
-        `<b>Ukuran Audio Terlalu Besar</b>\n\nUkuran file audio melebihi batas 20 MB. Harap kirimkan rekaman suara yang lebih ringkas.`
+        `<b>Ukuran Audio Terlalu Besar</b>\n\nUkuran file audio melebihi batas ${maxMb} MB. Harap kirimkan rekaman suara yang lebih ringkas.`
       );
       return;
     }
@@ -258,15 +287,19 @@ export async function handleTelegramUpdate(
     text.startsWith('/crons') ||
     text.startsWith('/delcron');
 
+  const channelLink = config.bot.channelId
+    ? `<a href="https://t.me/${config.bot.channelId.replace('@', '')}">${config.bot.channelName}</a>`
+    : config.bot.channelName;
+
   if (text.startsWith('/') && !isPublicCommand && !userIsAdmin) {
     await sendTelegramMessage(
       token,
       chatId,
       voicePrefix +
         `<b>Akses Dibatasi</b>\n\n` +
-        `Perintah administratif ini khusus untuk Pengelola (@alfian04121).\n` +
+        `Perintah administratif ini khusus untuk Pengelola (@${config.admin.username}).\n` +
         `Pengguna umum dapat menggunakan chat interaktif AI dan perintah <code>/news</code>.\n\n` +
-        `Kunjungi channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
+        `Kunjungi channel resmi: ${channelLink}.`
     );
     return;
   }
@@ -304,33 +337,33 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `Halo, Administrator <b>${userName}</b>! (@alfian04121)\n\n` +
-          `Selamat datang di konsol kendali <b>Technokers AI Bot Pro</b>.\n\n` +
+        `Halo, Administrator <b>${userName}</b>! (@${config.admin.username})\n\n` +
+          `Selamat datang di konsol kendali <b>${config.bot.name}</b>.\n\n` +
           `<b>Perintah Khusus Admin:</b>\n` +
           `• <code>/dashboard_code</code> - Buat kode OTP masuk Web Dashboard (Valid 5 Menit)\n` +
           `• <code>/connectors</code> - Kelola integrasi Blogger, Gmail, & Webhook\n` +
           `• <code>/models</code> - Daftar model Cloudflare & Backup OpenAI API\n` +
           `• <code>/setlimit &lt;angka&gt;</code> - Atur batas chat harian user (0 = disable limit)\n` +
           `• <code>/preview</code> - Pratinjau draf berita hari ini\n` +
-          `• <code>/post_now</code> - Kirim langsung digest ke channel @aicomindo\n` +
+          `• <code>/post_now</code> - Kirim langsung digest ke channel ${config.bot.channelName || config.bot.channelId}\n` +
           `• <code>/stop_posting</code> & <code>/resume_posting</code> - Pause / resume scheduler\n` +
           `• <code>/status</code> & <code>/usage</code> - Pantau kuota & metrik sistem\n\n` +
           `Ketik <code>/help</code> untuk panduan lengkap semua perintah.`
       );
     } else {
-      const dailyLimit = await getDailyChatLimit(env.AI_NEWS_KV);
+      const dailyLimit = await getDailyChatLimit(env.AI_NEWS_KV, env);
       const limitText = dailyLimit > 0 ? `${dailyLimit} pesan per hari` : 'Tanpa batas (Unlimited)';
       await sendTelegramMessage(
         token,
         chatId,
         `Halo, <b>${userName}</b>!\n\n` +
-          `Selamat datang di <b>Technokers AI Bot</b>.\n` +
-          `Asisten cerdas resmi dari komunitas <a href="https://t.me/aicomindo">@aicomindo (AI Community News Indonesia)</a>.\n\n` +
+          `Selamat datang di <b>${config.bot.name}</b>.\n` +
+          `Asisten cerdas resmi dari komunitas ${channelLink}.\n\n` +
           `<b>Layanan yang Tersedia:</b>\n` +
           `• <b>Tanya AI:</b> Tanyakan konsep kecerdasan buatan, coding, atau model LLM (Kuota: ${limitText}). Bot mengingat alur percakapan Anda secara terisolasi.\n` +
           `• <b>/news:</b> Baca ringkasan berita AI terhangat kapan saja secara instan.\n` +
           `• <b>/reset:</b> Hapus memori percakapan untuk memulai topik baru.\n\n` +
-          `Dapatkan rangkuman harian setiap jam 18:00 WIB di <a href="https://t.me/aicomindo">Channel Telegram @aicomindo</a>!`
+          `Dapatkan rangkuman harian setiap jam 18:00 WIB di ${channelLink}!`
       );
     }
     return;
@@ -356,7 +389,7 @@ export async function handleTelegramUpdate(
           `<b>Manajemen Limit User:</b>\n` +
           `• <code>/setlimit &lt;n&gt;</code> - Atur batas chat harian (Contoh: /setlimit 40, /setlimit 0)\n` +
           `• <code>/getlimit</code> - Periksa pengaturan limit aktif\n\n` +
-          `<b>Kontrol Channel @aicomindo:</b>\n` +
+          `<b>Kontrol Channel ${config.bot.channelName || config.bot.channelId}:</b>\n` +
           `• <code>/preview</code> - Pratinjau draf berita hari ini\n` +
           `• <code>/post_now</code> - Kirim langsung postingan ke channel\n` +
           `• <code>/stop_posting</code> - Hentikan posting otomatis jam 18:00 WIB\n` +
@@ -374,7 +407,7 @@ export async function handleTelegramUpdate(
           `• <b>Chat Interaktif:</b> Kirimkan pertanyaan apa saja seputar AI, pemrograman, atau teknologi. Asisten memiliki memori khusus percakapan Anda.\n` +
           `• <b>/news:</b> Dapatkan rangkuman kurasi berita AI terbaru hari ini.\n` +
           `• <b>/reset:</b> Hapus riwayat percakapan sesi Anda untuk memulai topik baru.\n\n` +
-          `Gabung channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
+          `Gabung channel resmi: ${channelLink}.`
       );
     }
     return;
@@ -508,7 +541,7 @@ export async function handleTelegramUpdate(
           `• <code>/cron 0 9 * * * Minum air pagi</code> (Tiap jam 09:00 WIB)\n` +
           `• <code>/cron tiap hari jam 08:30 Standup meeting</code>\n` +
           `• <code>/cron tiap senin jam 10:00 Evaluasi mingguan</code>` +
-          (userIsAdmin ? `\n• Tambahkan <code>--channel</code> untuk posting otomatis ke @aicomindo` : '')
+          (userIsAdmin ? `\n• Tambahkan <code>--channel</code> untuk posting otomatis ke ${config.bot.channelName || config.bot.channelId}` : '')
       );
       return;
     }
@@ -579,7 +612,9 @@ export async function handleTelegramUpdate(
     const listStr = activeJobs
       .map((j) => {
         const typeStr = j.type === 'cron' ? '[Jadwal Rutin]' : '[Pengingat]';
-        const targetStr = String(j.targetChatId) === String(env.CHANNEL_ID) ? 'Channel @aicomindo' : 'Private';
+        const targetStr = String(j.targetChatId) === String(env.CHANNEL_ID)
+          ? `Channel ${config.bot.channelName || config.bot.channelId}`
+          : 'Private';
         return `• ${typeStr} <b>${escapeHtml(j.message)}</b>\n  Waktu: <i>${j.scheduleRaw}</i>\n  Target: ${targetStr}\n  ID: <code>${j.id}</code> (Batal: <code>/delremind ${j.id}</code>)`;
       })
       .join('\n\n');
@@ -853,10 +888,20 @@ export async function handleTelegramUpdate(
       return;
     }
 
+    const targetUrl = parts[1];
+    if (!isValidPublicHttpUrl(targetUrl)) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>URL Berita Tidak Valid / Ditolak:</b>\nURL harus menggunakan protokol http:// atau https:// publik (bukan localhost, loopback, atau IP privat internal).`
+      );
+      return;
+    }
+
     await addInjectedNews(env.AI_NEWS_KV, {
       id: `manual_${Date.now()}`,
       title: parts[0],
-      url: parts[1],
+      url: targetUrl,
       source: 'Admin Manual',
       snippet: parts[2] || 'Breaking news',
       publishedAt: new Date().toISOString(),
@@ -916,7 +961,7 @@ export async function handleTelegramUpdate(
   // REGULAR CONVERSATION CHAT (With Autonomous Tool & Function Calling)
   // Let the AI decide when to set reminders, ask clarification questions, or reply!
   // ==========================================
-  const chatPerm = await checkUserChatPermission(env.AI_NEWS_KV, userId, dateStr);
+  const chatPerm = await checkUserChatPermission(env.AI_NEWS_KV, userId, dateStr, env);
   if (!chatPerm.allowed) {
     await sendTelegramMessage(
       token,
@@ -924,7 +969,7 @@ export async function handleTelegramUpdate(
       `<b>Batas Chat Harian Tercapai (${chatPerm.count}/${chatPerm.limit})</b>\n\n` +
         `Anda telah menggunakan seluruh kuota chat (${chatPerm.limit} pesan) untuk hari ini.\n` +
         `Kuota akan direset kembali besok pada pukul 00:00 WIB.\n\n` +
-        `Tetap ikuti perkembangan berita AI terlengkap di channel <a href="https://t.me/aicomindo">@aicomindo</a>!`
+        `Tetap ikuti perkembangan berita AI terlengkap di channel ${config.bot.channelName || config.bot.channelId}!`
     );
     return;
   }
@@ -938,16 +983,26 @@ export async function handleTelegramUpdate(
   try {
     const history = await getIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
 
-    const systemPrompt = `${BOT_SYSTEM_INSTRUCTION}
+    const persona = buildContextAwareSystemPersona(
+      {
+        userId,
+        userName,
+        userHandle,
+        isAdmin: userIsAdmin,
+        platform: 'telegram',
+      },
+      env
+    );
 
-KONTEKS PENGGUNA TERISOLASI:
-- Kamu sedang berbicara secara privat dengan pengguna bernama "${userName}" (${userHandle || 'ID: ' + userId}).
-- Sesi percakapan ini sepenuhnya terisolasi dan spesifik untuk pengguna ini. JANGAN PERNAH mencampur adukkan topik atau data dari pengguna lain!
+    const systemPrompt = `${persona}
+
+PANDUAN OPERASIONAL:
+- Sesi percakapan ini terisolasi untuk "${userName}" (ID: ${userId}).
 - Jika pengguna meminta pengingat atau menyebut kegiatan yang akan datang, kamu dapat memutuskan secara mandiri apakah harus memanggil tool 'set_reminder' atau bertanya secara santai apakah mereka mau diingatkan!
-- JANGAN PERNAH menyebutkan kode hash, job ID, atau nomor teknis internal apa pun saat merespons atau mengonfirmasi pengingat/jadwal kepada pengguna dalam obrolan biasa! Bicaralah secara santai, mengalir, dan ramah seperti teman (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").
-- Jika menggunakan formatting, gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
-- Jika ditanya seputar channel atau bot, jelaskan secara santai bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
-- Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
+- JANGAN PERNAH menyebutkan kode hash, job ID, atau nomor teknis database kepada pengguna dalam obrolan biasa! Bicaralah secara santai, mengalir, dan ramah seperti teman.
+- Gunakan tag format HTML Telegram yang valid (<b>tebal</b>, <i>miring</i>, <code>kode</code>).
+- Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah asisten resmi dari ${config.bot.channelName} (${config.bot.channelId}).
+- JANGAN PERNAH mencetak token rahasia, password, atau secret key internal di chat.`;
 
     const agentResult = await runConversationalAgent(
       env,
@@ -964,16 +1019,20 @@ KONTEKS PENGGUNA TERISOLASI:
       systemPrompt
     );
 
-    const replyText = agentResult.replyText;
+    const sanitizedReply = sanitizeSecretLeaks(agentResult.replyText, [
+      env.TELEGRAM_TOKEN,
+      env.BACKUP_AI_KEY,
+      (env as any).TELEGRAM_WEBHOOK_SECRET,
+    ]);
 
     const updatedHistory: ChatMessage[] = [
       ...history,
       { role: 'user', content: text, timestamp: Date.now() },
-      { role: 'assistant', content: replyText, timestamp: Date.now() },
+      { role: 'assistant', content: sanitizedReply, timestamp: Date.now() },
     ];
     await saveIsolatedChatHistory(env.AI_NEWS_KV, sessionKey, updatedHistory);
 
-    await sendTelegramMessage(token, chatId, voicePrefix + replyText, {
+    await sendTelegramMessage(token, chatId, voicePrefix + sanitizedReply, {
       replyToMessageId: msg.message_id,
     });
   } catch (err) {

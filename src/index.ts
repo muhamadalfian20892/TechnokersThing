@@ -34,7 +34,8 @@ import { fetchAllAvailableModels } from './news/models';
 import { runUnifiedAiCompletion } from './news/ai_client';
 import { runConversationalAgent } from './news/agent';
 import { BOT_SYSTEM_INSTRUCTION } from './news/prompts';
-import { stripEmojis } from './utils/text';
+import { stripEmojis, sanitizeSecretLeaks } from './utils/text';
+import { getAppConfig, buildContextAwareSystemPersona, AppConfig } from './config';
 import {
   getAllConnectors,
   getConnector,
@@ -197,9 +198,17 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
     const clientIp = request.headers.get('cf-connecting-ip') || '127.0.0.1';
+    const config = getAppConfig(env);
 
     // 1. Telegram Webhook Endpoint
     if (url.pathname === '/telegram/webhook' && request.method === 'POST') {
+      if (config.webhookSecret) {
+        const headerSecret = request.headers.get('x-telegram-bot-api-secret-token');
+        if (headerSecret !== config.webhookSecret) {
+          console.warn('[Webhook] Rejected unauthorized webhook call: secret token mismatch');
+          return Response.json({ ok: false, error: 'Unauthorized' }, { status: 403 });
+        }
+      }
       try {
         const update = (await request.json()) as TelegramUpdate;
         ctx.waitUntil(handleTelegramUpdate(update, env));
@@ -210,10 +219,14 @@ export default {
       }
     }
 
-    // 2. Set Webhook Endpoint
+    // 2. Set Webhook Endpoint (Protected)
     if (url.pathname === '/telegram/set-webhook') {
+      const sessionToken = getSessionTokenFromRequest(request);
+      const isAuth = await verifyDashboardSession(env.AI_NEWS_KV, sessionToken);
+      if (!isAuth) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
       const webhookUrl = `${url.origin}/telegram/webhook`;
-      const res = await setTelegramWebhook(env.TELEGRAM_TOKEN, webhookUrl);
+      const res = await setTelegramWebhook(env.TELEGRAM_TOKEN, webhookUrl, config.webhookSecret);
       return Response.json({
         webhookUrl,
         telegramResponse: res,
@@ -293,15 +306,22 @@ export default {
       });
     }
 
-    // 7. Manual Trigger (Force post)
+    // 7. Manual Trigger (Force post - Protected)
     if (url.pathname === '/api/trigger-news') {
+      const sessionToken = getSessionTokenFromRequest(request);
+      const isAuth = await verifyDashboardSession(env.AI_NEWS_KV, sessionToken);
+      if (!isAuth) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
       const force = url.searchParams.get('force') === 'true';
       const result = await executeDailyNewsPosting(env, force);
       return Response.json(result);
     }
 
-    // 8. Dry Run / Preview Digest
+    // 8. Dry Run / Preview Digest (Protected)
     if (url.pathname === '/api/preview-news') {
+      const sessionToken = getSessionTokenFromRequest(request);
+      const isAuth = await verifyDashboardSession(env.AI_NEWS_KV, sessionToken);
+      if (!isAuth) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
       const { isFriday, formattedDate } = getWibInfo();
       const candidates = await fetchLatestAINews();
       const unposted = await filterUnpostedNews(env.AI_NEWS_KV, candidates);
@@ -337,7 +357,7 @@ export default {
         const verifyRes = await verifyAndConsumeDashboardOtp(env.AI_NEWS_KV, code, clientIp);
 
         if (!verifyRes.ok) {
-          return new Response(renderLoginPage(verifyRes.error), {
+          return new Response(renderLoginPage(verifyRes.error, env), {
             status: 401,
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
           });
@@ -351,7 +371,7 @@ export default {
           },
         });
       } catch (err) {
-        return new Response(renderLoginPage('Terjadi kesalahan saat memproses login.'), {
+        return new Response(renderLoginPage('Terjadi kesalahan saat memproses login.', env), {
           status: 500,
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
@@ -470,7 +490,7 @@ export default {
     // Direct Web Chat API: Get chat history
     if (url.pathname === '/api/dashboard/chat/history' && request.method === 'GET') {
       if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-      const adminSessionKey = 'web:admin:1023972475';
+      const adminSessionKey = `web:admin:${config.admin.userId}`;
       const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
       return Response.json({ ok: true, history });
     }
@@ -478,7 +498,7 @@ export default {
     // Direct Web Chat API: Clear chat history
     if (url.pathname === '/api/dashboard/chat/clear' && request.method === 'POST') {
       if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-      const adminSessionKey = 'web:admin:1023972475';
+      const adminSessionKey = `web:admin:${config.admin.userId}`;
       await clearIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
       return Response.json({ ok: true, message: 'Riwayat percakapan web dashboard berhasil dibersihkan.' });
     }
@@ -493,18 +513,20 @@ export default {
           return Response.json({ ok: false, error: 'Pesan tidak boleh kosong.' }, { status: 400 });
         }
 
-        const adminSessionKey = 'web:admin:1023972475';
+        const adminSessionKey = `web:admin:${config.admin.userId}`;
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
 
-        // Autonomous Conversational Agent with Intelligent Tool & Function Calling!
-        const systemPrompt = `${BOT_SYSTEM_INSTRUCTION}
-
-KONTEKS PENGGUNA TERISOLASI:
-- Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
-- Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
-- Jika admin bertanya seputar menyambungkan ke Google, Blogger, Gmail, atau Webhook, jelaskan bahwa ia dapat mengisi kredensial pada tab Universal Connectors di dashboard ini.
-- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat reminder/pengingat atau cron job, panggil tool tersebut atau tanyakan konfirmasi secara santai!
-- JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").`;
+        // Autonomous Conversational Agent with Dynamic Persona
+        const systemPrompt = buildContextAwareSystemPersona(
+          {
+            userId: config.admin.userId,
+            userName: config.admin.name,
+            userHandle: '@' + config.admin.username,
+            isAdmin: true,
+            platform: 'web_dashboard',
+          },
+          env
+        );
 
         let replyText = '';
         const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
@@ -517,9 +539,9 @@ KONTEKS PENGGUNA TERISOLASI:
             userMessage,
             {
               env,
-              userId: 1023972475,
-              userName: 'Muhamad Alfian',
-              chatId: 1023972475,
+              userId: config.admin.userId,
+              userName: config.admin.name,
+              chatId: config.admin.userId,
               sourcePlatform: 'web_dashboard',
               isAdmin: true,
             },
@@ -580,17 +602,19 @@ KONTEKS PENGGUNA TERISOLASI:
           });
         }
 
-        const adminSessionKey = 'web:admin:1023972475';
+        const adminSessionKey = `web:admin:${config.admin.userId}`;
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
 
-        const systemPrompt = `${BOT_SYSTEM_INSTRUCTION}
-
-KONTEKS PENGGUNA TERISOLASI:
-- Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
-- Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
-- Pengguna mengirimkan pesan melalui REKAMAN SUARA (Voice Message) yang telah ditranskripsikan.
-- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat pengingat/reminder, panggil tool tersebut dan jawab secara santai.
-- JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa.`;
+        const systemPrompt = buildContextAwareSystemPersona(
+          {
+            userId: config.admin.userId,
+            userName: config.admin.name,
+            userHandle: '@' + config.admin.username,
+            isAdmin: true,
+            platform: 'web_dashboard',
+          },
+          env
+        );
 
         let replyText = '';
         const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
@@ -603,9 +627,9 @@ KONTEKS PENGGUNA TERISOLASI:
             userMessage,
             {
               env,
-              userId: 1023972475,
-              userName: 'Muhamad Alfian',
-              chatId: 1023972475,
+              userId: config.admin.userId,
+              userName: config.admin.name,
+              chatId: config.admin.userId,
               sourcePlatform: 'web_dashboard',
               isAdmin: true,
             },
@@ -651,7 +675,7 @@ KONTEKS PENGGUNA TERISOLASI:
         };
         const schedule = (body.schedule || '').trim();
         const msg = (body.message || '').trim();
-        const target = body.targetChatId || '1023972475';
+        const target = body.targetChatId || config.admin.userId;
 
         if (!schedule || !msg) {
           return Response.json({ ok: false, error: 'Jadwal dan pesan tidak boleh kosong.' }, { status: 400 });
@@ -669,8 +693,8 @@ KONTEKS PENGGUNA TERISOLASI:
           message: parsed.message || msg,
           targetPlatform: isDashboard ? 'dashboard' : 'telegram',
           targetChatId: target,
-          creatorId: '1023972475',
-          creatorName: 'Muhamad Alfian (Web Admin)',
+          creatorId: config.admin.userId,
+          creatorName: `${config.admin.name} (Web Admin)`,
           scheduleRaw: parsed.scheduleRaw || schedule,
           dueAt: parsed.dueAt,
           cronExpression: parsed.cronExpression,
@@ -691,7 +715,7 @@ KONTEKS PENGGUNA TERISOLASI:
     if (url.pathname === '/api/jobs/delete' && request.method === 'POST') {
       if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
       const body = (await request.json()) as { id: string };
-      const delRes = await deleteJob(env.AI_NEWS_KV, body.id, '1023972475', true);
+      const delRes = await deleteJob(env.AI_NEWS_KV, body.id, config.admin.userId, true);
       return Response.json(delRes);
     }
 
@@ -713,7 +737,7 @@ KONTEKS PENGGUNA TERISOLASI:
           read: false,
         };
         await addWebNotification(env.AI_NEWS_KV, notif);
-        const webSessionKey = 'web:admin:1023972475';
+        const webSessionKey = `web:admin:${config.admin.userId}`;
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, webSessionKey);
         history.push({
           role: 'assistant',
@@ -751,7 +775,7 @@ KONTEKS PENGGUNA TERISOLASI:
     // 11. HOMEPAGE / DASHBOARD RENDER (WCAG 2.1 AAA)
     // ==========================================
     if (!isAuthenticated) {
-      return new Response(renderLoginPage(), {
+      return new Response(renderLoginPage(undefined, env), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
@@ -765,11 +789,12 @@ KONTEKS PENGGUNA TERISOLASI:
       getUsageStats(env.AI_NEWS_KV),
       fetchAllAvailableModels(env),
       getAllConnectors(env.AI_NEWS_KV),
-      getIsolatedChatHistory(env.AI_NEWS_KV, 'web:admin:1023972475'),
+      getIsolatedChatHistory(env.AI_NEWS_KV, `web:admin:${config.admin.userId}`),
       getAllJobs(env.AI_NEWS_KV),
     ]);
 
     const dashboardHtml = renderAdminDashboard({
+      config,
       channelId: env.CHANNEL_ID,
       activeModel,
       isPaused: paused,
@@ -796,7 +821,8 @@ KONTEKS PENGGUNA TERISOLASI:
 // Visible focus rings, 44x44px touch targets, skip links
 // ==========================================
 
-function renderLoginPage(errorMessage?: string): string {
+function renderLoginPage(errorMessage?: string, env?: Env): string {
+  const config = getAppConfig(env);
   return `<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -954,7 +980,7 @@ function renderLoginPage(errorMessage?: string): string {
 
   <main id="main-content" class="login-container" role="main" aria-labelledby="login-title">
     <h1 id="login-title">🔐 Admin Authenticator</h1>
-    <p>Akses khusus Administrator <b>@alfian04121</b>. Masukkan kode otentikasi sekali pakai.</p>
+    <p>Akses khusus Administrator <b>@${config.admin.username}</b>. Masukkan kode otentikasi sekali pakai.</p>
 
     ${errorMessage ? `<div class="alert-error" role="alert">${errorMessage}</div>` : ''}
 
@@ -980,7 +1006,7 @@ function renderLoginPage(errorMessage?: string): string {
 
     <div id="code-help" class="help-panel">
       <h2 style="margin: 0 0 0.5rem 0; font-size: 1.05rem; color: #38bdf8;">Instruksi Kode Akses:</h2>
-      1. Buka Telegram dan chat ke <a href="https://t.me/tckn_bot" target="_blank" rel="noopener">Bot Telegram @tckn_bot</a>.<br>
+      1. Buka Telegram dan chat ke <a href="https://t.me/${config.bot.username}" target="_blank" rel="noopener">Bot Telegram @${config.bot.username}</a>.<br>
       2. Ketik perintah <code>/dashboard_code</code>.<br>
       3. Kode hanya berlaku selama <b>5 menit</b> dan langsung kedaluwarsa setelah dipakai (maksimal 3x percobaan gagal).
     </div>
@@ -990,6 +1016,7 @@ function renderLoginPage(errorMessage?: string): string {
 }
 
 function renderAdminDashboard(data: {
+  config: AppConfig;
   channelId: string;
   activeModel: string;
   isPaused: boolean;
@@ -1487,7 +1514,7 @@ function renderAdminDashboard(data: {
           <span>💬 Live Web Chat dengan Technokers AI</span>
           <button class="btn btn-secondary" style="min-height: 40px; padding: 0.4rem 0.8rem; font-size: 0.85rem;" onclick="clearWebChat()">🧹 Bersihkan Chat</button>
         </h2>
-        <p>Anda terhubung langsung dengan AI Bot melalui Dashboard Web (Konteks Terisolasi Khusus Administrator <b>@alfian04121</b>). Bot mengetahui platform chat Anda! Anda bisa meminta pengingat cerdas seperti: <i>"ingetin buat makan 3 menit lagi ya, ingetinnya disini aja"</i> atau <i>"ingetin buat makan 3 menit lagi ya, di telegram aja"</i>.</p>
+        <p>Anda terhubung langsung dengan AI Bot melalui Dashboard Web (Konteks Terisolasi Khusus Administrator <b>@${data.config.admin.username}</b>). Bot mengetahui platform chat Anda! Anda bisa meminta pengingat cerdas seperti: <i>"ingetin buat makan 3 menit lagi ya, ingetinnya disini aja"</i> atau <i>"ingetin buat makan 3 menit lagi ya, di telegram aja"</i>.</p>
 
         <div id="chatBox" class="chat-box" role="log" aria-live="polite" aria-label="Riwayat percakapan">
           ${
@@ -1503,7 +1530,7 @@ function renderAdminDashboard(data: {
                   .join('')
               : `<div class="chat-message chat-assistant">
               <div class="chat-sender">🤖 Technokers AI</div>
-              <div>Halo Administrator <b>Muhamad Alfian</b>! 👋 Ada yang bisa saya bantu terkait berita AI, koding Cloudflare Workers, atau pengaturan konektor hari ini?</div>
+              <div>Halo Administrator <b>${data.config.admin.name}</b>! 👋 Ada yang bisa saya bantu terkait berita AI, koding Cloudflare Workers, atau pengaturan konektor hari ini?</div>
             </div>`
           }
         </div>
@@ -1657,7 +1684,7 @@ function renderAdminDashboard(data: {
               <label for="newJobTarget">Target Pengiriman:</label>
               <select id="newJobTarget">
                 <option value="dashboard">Web Dashboard ini (Di sini)</option>
-                <option value="1023972475">Chat Pribadi Admin Telegram (@alfian04121)</option>
+                <option value="${data.config.admin.userId}">Chat Pribadi Admin Telegram (@${data.config.admin.username})</option>
                 <option value="${data.channelId}">Channel Resmi (${data.channelId})</option>
               </select>
             </div>
@@ -1715,7 +1742,7 @@ function renderAdminDashboard(data: {
   </main>
 
   <footer style="margin-top: 3rem; text-align: center; color: #94a3b8; font-size: 0.9rem; border-top: 1px solid #1e293b; padding-top: 1.5rem;">
-    Technokers AI Bot Pro &bull; Desain Aksesibel Standar WCAG 2.1 AAA &bull; Dedicated to @aicomindo
+    ${data.config.bot.name} &bull; Desain Aksesibel Standar WCAG 2.1 AAA &bull; Dedicated to ${data.config.bot.channelName || data.config.bot.channelId}
   </footer>
 
   <script>

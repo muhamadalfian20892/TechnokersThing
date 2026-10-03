@@ -68,6 +68,9 @@ export async function callBackupOpenAi(
   maxTokens: number = 2000,
   tools?: any[]
 ): Promise<{ text: string; toolCalls?: ToolCall[] }> {
+  if (!url || !apiKey) {
+    throw new Error('Backup AI endpoint (BACKUP_AI_URL / BACKUP_AI_KEY) belum dikonfigurasi.');
+  }
   const endpoint = `${url.replace(/\/+$/, '')}/chat/completions`;
 
   const bodyPayload: any = {

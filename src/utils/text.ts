@@ -35,3 +35,51 @@ export function escapeHtml(text: string): string {
   };
   return text.replace(/[&<>"']/g, (m) => map[m]);
 }
+
+/**
+ * Validates that a URL is a legitimate public HTTP or HTTPS web address.
+ * Defends against Server-Side Request Forgery (SSRF) and local file inclusion.
+ */
+export function isValidPublicHttpUrl(urlString: string): boolean {
+  if (!urlString || typeof urlString !== 'string') return false;
+  try {
+    const url = new URL(urlString.trim());
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return false;
+    }
+    const host = url.hostname.toLowerCase();
+    // Block localhost, link-local, loopback, private RFC1918 subnets, AWS/GCP metadata IP
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host) ||
+      /^169\.254\./.test(host)
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sanitizes output text to prevent secret exfiltration / prompt injection leaks.
+ */
+export function sanitizeSecretLeaks(text: string, secrets: (string | undefined | null)[]): string {
+  if (!text) return '';
+  let sanitized = text;
+  for (const s of secrets) {
+    if (s && s.length >= 8) {
+      // Replace secret substring with [REDACTED]
+      sanitized = sanitized.split(s).join('[REDACTED_SECRET]');
+    }
+  }
+  return sanitized;
+}

@@ -21,6 +21,7 @@ import {
   getIsolatedChatHistory,
   saveIsolatedChatHistory,
 } from '../news/memory';
+import { getAppConfig } from '../config';
 
 const KV_JOBS_KEY = 'scheduler:jobs';
 const KV_WEB_NOTIFICATIONS_KEY = 'scheduler:web_notifications';
@@ -149,25 +150,27 @@ export async function clearPendingReminder(kv: KVNamespace, sessionKey: string):
 // Helper to resolve Telegram username or ID to numerical Chat ID
 export async function resolveTelegramChatId(
   kv: KVNamespace,
-  input: string | number
+  input: string | number,
+  env?: any
 ): Promise<{ chatId: string | number; label: string } | null> {
+  const config = getAppConfig(env);
   const clean = String(input).trim();
   // Numeric chat ID
   if (/^-?\d{5,}$/.test(clean)) {
-    if (clean === '1023972475') {
-      return { chatId: 1023972475, label: '@alfian04121' };
+    if (clean === String(config.admin.userId)) {
+      return { chatId: clean, label: `@${config.admin.username}` };
     }
     return { chatId: clean, label: `ID: ${clean}` };
   }
 
   // Handle username
   const username = clean.replace(/^@/, '').toLowerCase();
-  if (username === 'alfian04121' || username === 'muhamadalfian' || username === 'alfian') {
-    return { chatId: 1023972475, label: '@alfian04121' };
+  if (username === config.admin.username.toLowerCase()) {
+    return { chatId: config.admin.userId, label: `@${config.admin.username}` };
   }
 
   // Check admin profiles
-  const admins = await getAdminList(kv);
+  const admins = await getAdminList(kv, env);
   for (const adminId of admins) {
     const profile = await getUserProfile(kv, adminId);
     if (profile?.username && profile.username.toLowerCase() === username) {
@@ -249,7 +252,8 @@ export async function processDueJobs(
           await addWebNotification(env.AI_NEWS_KV, notif);
 
           // Append to web admin chat history
-          const webSessionKey = 'web:admin:1023972475';
+          const config = getAppConfig(env);
+          const webSessionKey = `web:admin:${config.admin.userId}`;
           const history = await getIsolatedChatHistory(env.AI_NEWS_KV, webSessionKey);
           history.push({
             role: 'assistant',
@@ -298,7 +302,8 @@ export async function processDueJobs(
           };
           await addWebNotification(env.AI_NEWS_KV, notif);
 
-          const webSessionKey = 'web:admin:1023972475';
+          const config = getAppConfig(env);
+          const webSessionKey = `web:admin:${config.admin.userId}`;
           const history = await getIsolatedChatHistory(env.AI_NEWS_KV, webSessionKey);
           history.push({
             role: 'assistant',
@@ -363,7 +368,8 @@ export async function processReminderIntent(
 
   // 1. Check if there's a PENDING reminder awaiting Telegram account confirmation (for Web Dashboard)
   if (sourcePlatform === 'web_dashboard') {
-    const pendingKey = 'web:admin:1023972475';
+    const config = getAppConfig(env);
+    const pendingKey = `web:admin:${config.admin.userId}`;
     const pending = await getPendingReminder(env.AI_NEWS_KV, pendingKey);
 
     if (pending) {
@@ -516,13 +522,14 @@ export async function processReminderIntent(
           createdAt: Date.now(),
           expiresAt: Date.now() + 15 * 60 * 1000,
         };
-        await setPendingReminder(env.AI_NEWS_KV, 'web:admin:1023972475', pendingState);
+        const config = getAppConfig(env);
+        await setPendingReminder(env.AI_NEWS_KV, `web:admin:${config.admin.userId}`, pendingState);
 
         return {
           handled: true,
           replyText:
             `<b>Telegram kamu yang mana?</b>\n\n` +
-            `Silakan masukkan username Telegram kamu (contoh: <code>@alfian04121</code>) atau Chat ID kamu agar pengingat <i>"${escapeHtml(parseResult.message)}"</i> bisa dikirimkan langsung ke sana.\n\n` +
+            `Silakan masukkan username Telegram kamu (contoh: <code>@${config.admin.username}</code>) atau Chat ID kamu agar pengingat <i>"${escapeHtml(parseResult.message)}"</i> bisa dikirimkan langsung ke sana.\n\n` +
             `<i>(Ketik "batal" jika ingin membatalkan)</i>`,
         };
       }

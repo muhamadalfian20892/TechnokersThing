@@ -2,6 +2,7 @@ import { ScheduledJob, JobPlatform } from './types';
 import { saveJob, getAllJobs, deleteJob, resolveTelegramChatId } from './manager';
 import { getWibDate, wibComponentsToEpoch } from './parser';
 import { stripEmojis, escapeHtml } from '../utils/text';
+import { getAppConfig } from '../config';
 
 export interface ToolExecutionContext {
   env: Env;
@@ -54,7 +55,7 @@ export const SCHEDULER_TOOLS_SCHEMA = [
           },
           target_account: {
             type: 'string',
-            description: 'Username Telegram (misal: "@alfian04121") atau Chat ID jika pengguna di Web Dashboard meminta kirim ke Telegram. Berikan null jika tidak disebutkan.',
+            description: 'Username Telegram (misal: username akun pengguna) atau Chat ID jika pengguna di Web Dashboard meminta kirim ke Telegram. Berikan null jika tidak disebutkan.',
           },
         },
         required: ['message'],
@@ -84,7 +85,7 @@ export const SCHEDULER_TOOLS_SCHEMA = [
           target_platform: {
             type: 'string',
             enum: ['current', 'telegram', 'dashboard', 'channel'],
-            description: 'Tujuan notifikasi. "channel" hanya boleh jika pengguna adalah admin (@alfian04121).',
+            description: 'Tujuan notifikasi. "channel" hanya boleh jika pengguna adalah admin atau pengelola bot.',
           },
           target_account: {
             type: 'string',
@@ -234,17 +235,19 @@ export async function executeSchedulerTool(
     } else {
       // Chatting on Web Dashboard
       if (targetPlatformArg === 'telegram') {
+        const config = getAppConfig(env);
         if (targetAccount) {
-          const resolved = await resolveTelegramChatId(env.AI_NEWS_KV, targetAccount);
+          const resolved = await resolveTelegramChatId(env.AI_NEWS_KV, targetAccount, env);
           if (resolved) {
             targetPlatform = 'telegram';
             targetChatId = resolved.chatId;
             targetLabel = `Akun Telegram ${resolved.label} (ID: ${resolved.chatId})`;
           } else {
+            const botHandle = config.bot.username ? `@${config.bot.username}` : 'bot kami';
             return {
               toolName: name,
               success: false,
-              message: `Akun Telegram <code>${targetAccount}</code> belum terdaftar di bot kami. Silakan pastikan akun tersebut sudah pernah mengirim pesan ke bot @tckn_bot atau gunakan ID numerik.`,
+              message: `Akun Telegram <code>${targetAccount}</code> belum terdaftar di bot kami. Silakan pastikan akun tersebut sudah pernah mengirim pesan ke ${botHandle} atau gunakan ID numerik.`,
             };
           }
         } else {
@@ -255,7 +258,7 @@ export async function executeSchedulerTool(
             needsClarification: true,
             clarificationQuestion:
               `Boleh! Mau dikirim ke akun Telegram kamu yang mana? ` +
-              `Silakan sebutkan username Telegram kamu (contoh: <code>@alfian04121</code>) atau Chat ID kamu ya!`,
+              `Silakan sebutkan username Telegram kamu (contoh: <code>@${config.admin.username}</code>) atau Chat ID kamu ya!`,
           };
         }
       } else {

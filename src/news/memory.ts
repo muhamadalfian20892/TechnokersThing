@@ -8,9 +8,10 @@ import {
   DashboardOtpRecord,
   DashboardSessionRecord,
 } from './types';
+import { getAppConfig, isSuperAdmin } from '../config';
 
-// Hardcoded Super Admin as requested: @alfian04121 (ID: 1023972475)
-export const SUPER_ADMIN_ID = '1023972475';
+// Super Admin configured from bot.config.json or environment variables
+export const SUPER_ADMIN_ID = getAppConfig().admin.userId;
 
 // Fast SHA-256 for Cloudflare Workers Web Crypto API
 async function hashText(input: string): Promise<string> {
@@ -216,14 +217,15 @@ export async function resetStyleMemory(kv: KVNamespace): Promise<void> {
 // 5. Admin Authorization (Super Admin: 1023972475)
 // ==========================================
 
-export async function getAdminList(kv: KVNamespace): Promise<string[]> {
+export async function getAdminList(kv: KVNamespace, env?: Record<string, any>): Promise<string[]> {
+  const superAdminId = getAppConfig(env).admin.userId;
   const raw = await kv.get('config:admins');
-  let list: string[] = [SUPER_ADMIN_ID];
+  let list: string[] = [superAdminId];
   if (raw) {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        list = Array.from(new Set([SUPER_ADMIN_ID, ...parsed]));
+        list = Array.from(new Set([superAdminId, ...parsed.map(String)]));
       }
     } catch {
       // fallback
@@ -232,9 +234,9 @@ export async function getAdminList(kv: KVNamespace): Promise<string[]> {
   return list;
 }
 
-export async function addAdmin(kv: KVNamespace, userId: string | number): Promise<void> {
+export async function addAdmin(kv: KVNamespace, userId: string | number, env?: Record<string, any>): Promise<void> {
   const strId = String(userId);
-  const admins = await getAdminList(kv);
+  const admins = await getAdminList(kv, env);
   if (!admins.includes(strId)) {
     admins.push(strId);
     await kv.put('config:admins', JSON.stringify(admins));
@@ -242,22 +244,27 @@ export async function addAdmin(kv: KVNamespace, userId: string | number): Promis
   }
 }
 
-export async function isUserAdmin(kv: KVNamespace, userId: string | number): Promise<boolean> {
+export async function isUserAdmin(
+  kv: KVNamespace,
+  userId: string | number,
+  env?: Record<string, any>
+): Promise<boolean> {
   const strId = String(userId);
-  if (strId === SUPER_ADMIN_ID) return true;
-  const admins = await getAdminList(kv);
+  if (isSuperAdmin(strId, env)) return true;
+  const admins = await getAdminList(kv, env);
   return admins.includes(strId);
 }
 
 // ==========================================
-// 6. User Daily Chat Limit System (Default: 40/day)
+// 6. User Daily Chat Limit System (Configurable via bot.config.json / env)
 // ==========================================
 
-export async function getDailyChatLimit(kv: KVNamespace): Promise<number> {
+export async function getDailyChatLimit(kv: KVNamespace, env?: Record<string, any>): Promise<number> {
   const val = await kv.get('config:daily_chat_limit');
-  if (val === null) return 40;
+  const defaultLimit = getAppConfig(env).limits.defaultDailyUserChatLimit;
+  if (val === null) return defaultLimit;
   const num = parseInt(val, 10);
-  return isNaN(num) ? 40 : num;
+  return isNaN(num) ? defaultLimit : num;
 }
 
 export async function setDailyChatLimit(kv: KVNamespace, limit: number): Promise<void> {
@@ -290,14 +297,15 @@ export async function incrementUserDailyChat(
 export async function checkUserChatPermission(
   kv: KVNamespace,
   userId: string | number,
-  dateStr: string
+  dateStr: string,
+  env?: Record<string, any>
 ): Promise<{ allowed: boolean; count: number; limit: number; isAdmin: boolean }> {
-  const isAdmin = await isUserAdmin(kv, userId);
+  const isAdmin = await isUserAdmin(kv, userId, env);
   if (isAdmin) {
     return { allowed: true, count: 0, limit: 0, isAdmin: true };
   }
 
-  const limit = await getDailyChatLimit(kv);
+  const limit = await getDailyChatLimit(kv, env);
   if (limit === 0) {
     return { allowed: true, count: 0, limit: 0, isAdmin: false };
   }
