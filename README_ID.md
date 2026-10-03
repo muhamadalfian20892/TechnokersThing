@@ -68,6 +68,31 @@ New on 09/25/2026:
 
 ---
 
+## Mesin Dual AI dan Sistem Fallback Otomatis
+
+Cloudflare Workers AI itu praktis banget karena kita dikasih jatah gratis 10.000 Neurons setiap hari langsung di jaringan edge Cloudflare. Dalam kondisi normal, bot ini berjalan penuh menggunakan Workers AI gratisan: model `@cf/meta/llama-3.3-70b-instruct-fp8-fast` buat teks dan obrolan, serta `@cf/openai/whisper-large-v3-turbo` buat transkripsi pesan suara.
+
+Masalahnya, kalau channel kamu lagi aktif banget bikin rangkuman berita panjang atau ada banyak orang yang ngobrol di grup, jatah 10.000 Neurons harian Cloudflare itu bisa habis sewaktu-waktu. Waktu kuota Cloudflare habis atau jaringannya mendadak rate limit, bot ini gak bakal mendadak mati, bengong, atau ngirimin pesan error kaku ke pengguna.
+
+Bot ini udah dilengkapi arsitektur cadangan otomatis (failover):
+
+1. Pengalihan Otomatis Tanpa Gangguan:
+   Setiap kali panggilan ke Cloudflare Workers AI gagal, kena limit kuota harian, atau menghasilkan respons kosong, fungsi `runUnifiedAiCompletion` bakal langsung menangkap error tersebut. Sistem otomatis mencatat log audit (`CF_AI_FAILOVER_TO_BACKUP`) ke KV, lalu mengalihkan percakapan ke provider AI cadangan detik itu juga. Lawan bicara di Telegram gak bakal ngerasa ada kendala karena balasannya tetap datang dengan mulus.
+
+2. Mendukung Semua Provider Kompatibel OpenAI:
+   Mesin cadangan ini memanfaatkan format standar OpenAI API lewat variabel `BACKUP_AI_URL` dan `BACKUP_AI_KEY`. Kamu bebas mengarahkan URL cadangan ini ke OpenAI resmi, Groq, OpenRouter, DeepSeek, atau proxy milikmu sendiri. Model cadangan bawaan diatur ke `ag/gemini-3.8-flash-high`, tapi kamu bisa ganti sesukamu.
+
+3. Fallback Ganda untuk Pesan Suara:
+   Fitur transkripsi pesan suara juga punya cadangan bertingkat. Kalau model Whisper Turbo (`@cf/openai/whisper-large-v3-turbo`) lagi sibuk atau bermasalah, sistem bakal otomatis mencoba transkripsi ulang memakai Whisper standar (`@cf/openai/whisper`).
+
+4. Metrik dan Pemantauan Transparan:
+   Penggunaan bot selalu dicatat rapi ke Cloudflare KV secara terpisah. Kamu bisa cek lewat perintah `/usage` di Telegram atau lewat dashboard web untuk melihat perbandingan berapa kali bot pakai jatah gratis Cloudflare vs berapa kali bot harus lari ke provider cadangan. Jadi kamu tahu persis kapan kuota Cloudflare habis.
+
+5. Pindah Model Kapan Saja:
+   Admin juga bisa ganti model aktif secara manual lewat perintah `/setmodel <id>` kalau pengen sengaja pakai provider cadangan atau pengen nyoba model lain.
+
+---
+
 ## Konfigurasi (bot.config.json)
 
 Semua identitas dan batasan kuota bot disimpan di file `bot.config.json` pada root projek:

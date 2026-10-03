@@ -68,6 +68,31 @@ New on 09/25/2026:
 
 ---
 
+## Dual AI Architecture and Automatic Fallback
+
+Cloudflare Workers AI is an awesome edge compute platform: it gives you 10,000 free Neurons every single day, which is plenty for personal use and small groups. Under normal circumstances, the bot runs entirely on Cloudflare Workers AI using `@cf/meta/llama-3.3-70b-instruct-fp8-fast` for text generation and `@cf/openai/whisper-large-v3-turbo` for voice transcription.
+
+However, if your channel generates lots of news recaps or your community members chat actively, that free quota can run out. When Cloudflare's daily limits are hit (or if Cloudflare Workers AI temporarily throws an error or rate limits a request), the bot doesn't crash, hang, or send an error message to the user.
+
+Instead, the bot uses an automated multi-tiered fallback architecture:
+
+1. Seamless Failover:
+   Whenever an API call to Cloudflare Workers AI encounters an error, timeout, or rate limit, `runUnifiedAiCompletion` catches the exception immediately. It writes a quick audit record (`CF_AI_FAILOVER_TO_BACKUP`) to KV and immediately reroutes the exact prompt and message history to the backup provider without interrupting the conversation.
+
+2. Any OpenAI-Compatible Provider:
+   The backup engine connects to any standard OpenAI-compatible API via `BACKUP_AI_URL` and `BACKUP_AI_KEY`. You can point this to OpenAI, Groq, OpenRouter, DeepSeek, or your own self-hosted gateway. The default fallback model is set to `ag/gemini-3.8-flash-high`, but you can customize this as needed.
+
+3. Audio Transcription Fallback:
+   Voice note transcriptions also have redundancy. If the turbo model (`@cf/openai/whisper-large-v3-turbo`) encounters issues, the transcriber automatically retries with standard Whisper (`@cf/openai/whisper`) before giving up.
+
+4. Transparent Metrics and Observability:
+   The bot keeps track of every request in Cloudflare KV. Using the `/usage` command in Telegram or opening the web dashboard shows a clean split between primary Cloudflare generations and backup API requests. You always know exactly how many requests were saved by the fallback engine.
+
+5. Manual Override:
+   Admins can also switch models at any time using `/setmodel <id>` to explicitly prefer the backup engine or test specific models.
+
+---
+
 ## Configuration (bot.config.json)
 
 All bot identities and limits are stored in `bot.config.json` at the root of the project:
