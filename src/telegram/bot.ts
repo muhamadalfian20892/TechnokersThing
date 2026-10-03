@@ -53,6 +53,7 @@ import { ScheduledJob } from '../scheduler/types';
 import { ChatMessage } from '../news/types';
 import { stripEmojis, escapeHtml } from '../utils/text';
 import { transcribeAudio } from '../news/transcriber';
+import { BOT_SYSTEM_INSTRUCTION } from '../news/prompts';
 
 export interface TelegramVoice {
   file_id: string;
@@ -937,24 +938,16 @@ export async function handleTelegramUpdate(
   try {
     const history = await getIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
 
-    const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+    const systemPrompt = `${BOT_SYSTEM_INSTRUCTION}
+
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang berbicara secara privat dengan pengguna bernama "${userName}" (${userHandle || 'ID: ' + userId}).
 - Sesi percakapan ini sepenuhnya terisolasi dan spesifik untuk pengguna ini. JANGAN PERNAH mencampur adukkan topik atau data dari pengguna lain!
-- ATURAN MENYAPA (PENTING):
-  * JANGAN PERNAH mengulang salam atau sapaan nama pengguna ("Halo ${userName}", "Hai ${userName}", dll.) di setiap balasan jika percakapan sedang berlangsung!
-  * Sapa nama pengguna HANYA jika percakapan benar-benar baru pertama kali dimulai atau pengguna menyapa salam di pesan pembukanya ("halo", "hai", dll).
-  * Jika percakapan sedang berjalan atau pengguna menanyakan topik/pertanyaan, LANGSUNG jawab pertanyaan secara to-the-point, jelas, mengalir santai, dan cerdas tanpa mengulang sapaan pembuka di setiap pesan.
-- Jika pengguna meminta pengingat atau menyebut kegiatan yang akan datang, kamu dapat memutuskan secara mandiri apakah harus memanggil tool 'set_reminder' atau bertanya secara ramah apakah mereka mau diingatkan!
-
-STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
-1. DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun) demi kenyamanan pengguna dengan pembaca layar (screen reader).
-2. JANGAN PERNAH menyebutkan kode hash, job ID, atau nomor teknis internal apa pun saat merespons atau mengonfirmasi pengingat/jadwal kepada pengguna dalam obrolan biasa! Bicaralah secara santai, mengalir, dan ramah seperti teman (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").
-3. Jawab dalam Bahasa Indonesia yang alami, bersahabat, jelas, edukatif, dan mudah dipahami.
-4. Gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
-5. Buat teks memiliki hierarki visual yang kontras, terstruktur rapi, dan nyaman dibaca oleh pengguna maupun screen reader.
-6. Jika ditanya seputar channel atau bot, jelaskan bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
-7. Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
+- Jika pengguna meminta pengingat atau menyebut kegiatan yang akan datang, kamu dapat memutuskan secara mandiri apakah harus memanggil tool 'set_reminder' atau bertanya secara santai apakah mereka mau diingatkan!
+- JANGAN PERNAH menyebutkan kode hash, job ID, atau nomor teknis internal apa pun saat merespons atau mengonfirmasi pengingat/jadwal kepada pengguna dalam obrolan biasa! Bicaralah secara santai, mengalir, dan ramah seperti teman (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").
+- Jika menggunakan formatting, gunakan tag format HTML Telegram yang valid (<b>tebal</b> untuk poin penting, <i>miring</i> untuk istilah asing, <code>kode</code> untuk sintaks teknis).
+- Jika ditanya seputar channel atau bot, jelaskan secara santai bahwa kamu adalah bot resmi komunitas @aicomindo yang membagikan update AI setiap hari jam 18:00 WIB.
+- Jika ditanya tentang menghubungkan ke Blogger, Gmail, atau Google, informasikan bahwa admin bisa mengonfigurasi kredensialnya di Web Dashboard menu Connectors!`;
 
     const agentResult = await runConversationalAgent(
       env,

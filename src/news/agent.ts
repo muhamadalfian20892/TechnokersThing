@@ -8,7 +8,7 @@ import {
   ToolExecutionContext,
 } from '../scheduler/tools';
 import { getWibDate } from '../scheduler/parser';
-import { stripEmojis } from '../utils/text';
+import { BOT_SYSTEM_INSTRUCTION } from './prompts';
 
 export interface AgentResponse {
   replyText: string;
@@ -17,7 +17,7 @@ export interface AgentResponse {
 
 /**
  * Unified Conversational Agent with Intelligent Tool & Function Calling
- * Screen-reader friendly, WCAG 2.1 AAA compliant (zero emojis, natural spoken confirmation).
+ * Supports CHAT MODE and NEWS MODE with natural, human-like persona.
  */
 export async function runConversationalAgent(
   env: Env,
@@ -36,23 +36,13 @@ export async function runConversationalAgent(
       : `KONTEKS RUANG CHAT: Pengguna sedang berada di TELEGRAM BOT (@tckn_bot). Segala pengingat "disini" otomatis masuk ke chat Telegram saat ini.`;
 
   const fullSystemPrompt = `
-${baseSystemPrompt || 'Kamu adalah Technokers AI Assistant, asisten cerdas berwawasan luas.'}
+${baseSystemPrompt || BOT_SYSTEM_INSTRUCTION}
 
 WAKTU SAAT INI (WIB): ${timeStr}
 ${platformContext}
 USER: ${context.userName} (ID: ${context.userId}, Admin: ${context.isAdmin ? 'YA' : 'TIDAK'})
 
 ${SCHEDULER_SYSTEM_PROMPT_INSTRUCTIONS}
-
-STANDAR AKSESIBILITAS WCAG 2.1 AAA & SCREEN READER:
-- DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada simbol grafis/emoticon). Ini wajib demi kenyamanan pengguna tuna netra / screen reader.
-- JANGAN menyebutkan kode hash, job ID, atau nomor teknis internal apa pun saat mengonfirmasi pengingat atau jadwal kepada pengguna! Berbicaralah santai dan alami seperti teman (misal: "Siap, kamu bakal aku ingetin 1 menit lagi ya!").
-- Format jawaban dengan hierarki rapi, kontras, gunakan format HTML resmi jika perlu (<b>tebal</b>, <i>miring</i>, <code>kode</code>).
-- Berikan respon yang hangat, cerdas, bersahabat, to-the-point, dan edukatif.
-
-ATURAN MENYAPA (PENTING):
-- JANGAN PERNAH mengulang salam atau sapaan nama ("Halo ${context.userName}", "Hai ${context.userName}") di setiap respon jika percakapan sedang berjalan!
-- Hanya sapa nama jika pengguna baru pertama kali memulai obrolan atau baru menyapa salam di pesan pembuka. Jika obrolan sedang berlangsung atau pengguna menanyakan sesuatu, LANGSUNG jawab intinya secara cerdas, ramah, dan to-the-point.
 `.trim();
 
   const messagesToSend: ChatMessage[] = [
@@ -91,12 +81,12 @@ ATURAN MENYAPA (PENTING):
 
     if (needsClarificationMessage) {
       return {
-        replyText: stripEmojis(needsClarificationMessage),
+        replyText: needsClarificationMessage.trim(),
         toolCallsExecuted,
       };
     }
 
-    // Generate natural, friendly confirmation without technical IDs or emojis
+    // Generate natural, friendly confirmation without technical IDs
     const toolSummary = toolResults.join('\n');
     const followupMessages: ChatMessage[] = [
       ...messagesToSend,
@@ -106,24 +96,21 @@ ATURAN MENYAPA (PENTING):
         content: `Hasil eksekusi alat: ${toolSummary}
 
 TUGASMU:
-Sampaikan konfirmasi ini kepada pengguna secara santai, ramah, mengalir, dan alami dalam Bahasa Indonesia.
-ATURAN MUTLAK AKSESIBILITAS WCAG 2.1 AAA:
-1. DILARANG MENGGUNAKAN EMOJI SAMA SEKALI (demi pembaca layar/screen reader).
-2. JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem apa pun.
-3. Bicaralah wajar dan bersahabat (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!", atau "Beres, pengingat buat makan sudah aku pasang ya.").`,
+Sampaikan konfirmasi ini kepada pengguna secara santai, ramah, mengalir, dan alami dalam Bahasa Indonesia seperti ngobrol dengan teman.
+JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal apa pun (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!", atau "Beres, pengingat buat makan sudah aku pasang ya.").`,
       },
     ];
 
     try {
       const followupRes = await runUnifiedAiCompletion(env, activeModel, followupMessages, 400);
-      const cleanReply = stripEmojis(followupRes.text.trim()) || stripEmojis(toolSummary);
+      const cleanReply = followupRes.text.trim() || toolSummary;
       return {
         replyText: cleanReply,
         toolCallsExecuted,
       };
     } catch {
       return {
-        replyText: stripEmojis(toolSummary),
+        replyText: toolSummary,
         toolCallsExecuted,
       };
     }
@@ -131,7 +118,7 @@ ATURAN MUTLAK AKSESIBILITAS WCAG 2.1 AAA:
 
   // When AI decides to converse normally (or ask "kamu mau diingetin gak?")
   return {
-    replyText: stripEmojis(aiRes.text),
+    replyText: (aiRes.text || '').trim(),
     toolCallsExecuted: [],
   };
 }

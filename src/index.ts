@@ -33,6 +33,7 @@ import { generateDailyNewsDigest, getWibInfo } from './news/generator';
 import { fetchAllAvailableModels } from './news/models';
 import { runUnifiedAiCompletion } from './news/ai_client';
 import { runConversationalAgent } from './news/agent';
+import { BOT_SYSTEM_INSTRUCTION } from './news/prompts';
 import { stripEmojis } from './utils/text';
 import {
   getAllConnectors,
@@ -496,27 +497,19 @@ export default {
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
 
         // Autonomous Conversational Agent with Intelligent Tool & Function Calling!
-        const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+        const systemPrompt = `${BOT_SYSTEM_INSTRUCTION}
+
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
 - Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
-- Sambut admin dengan hangat jika ini pesan pertama, dan bantu apa pun yang dibutuhkan (analisis tech, kode, ringkasan, maupun konfigurasi bot).
-- ATURAN MENYAPA (PENTING): JANGAN PERNAH mengulang sapaan pembuka "Halo Muhamad" di setiap respons pesan jika percakapan sedang berlangsung! Langsung tanggapi dan jawab intinya secara cerdas dan to-the-point.
 - Jika admin bertanya seputar menyambungkan ke Google, Blogger, Gmail, atau Webhook, jelaskan bahwa ia dapat mengisi kredensial pada tab Universal Connectors di dashboard ini.
-- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat reminder/pengingat atau cron job, panggil tool tersebut atau tanyakan konfirmasi secara ramah!
-- Jika pengguna meminta pengingat "disini", kirimkan ke 'web_dashboard'. Jika minta di Telegram, tanyakan username atau chat id Telegram jika belum tersedia.
-
-STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
-1. DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun) demi kenyamanan pengguna tuna netra dan pembaca layar (screen reader).
-2. JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").
-3. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
-4. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
-5. Jawaban harus komprehensif, edukatif, dan to the point.`;
+- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat reminder/pengingat atau cron job, panggil tool tersebut atau tanyakan konfirmasi secara santai!
+- JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa (misal: "Oke, kamu bakal aku ingetin 1 menit lagi ya!").`;
 
         let replyText = '';
         const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
         if (intentRes.handled && intentRes.replyText) {
-          replyText = stripEmojis(intentRes.replyText);
+          replyText = intentRes.replyText;
         } else {
           const agentRes = await runConversationalAgent(
             env,
@@ -532,7 +525,7 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
             },
             systemPrompt
           );
-          replyText = stripEmojis(agentRes.replyText);
+          replyText = agentRes.replyText;
         }
 
         const updatedHistory: ChatMessage[] = [
@@ -590,25 +583,19 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
         const adminSessionKey = 'web:admin:1023972475';
         const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
 
-        const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+        const systemPrompt = `${BOT_SYSTEM_INSTRUCTION}
+
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
 - Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
 - Pengguna mengirimkan pesan melalui REKAMAN SUARA (Voice Message) yang telah ditranskripsikan.
-- Sambut admin dengan hangat dan bantu apa pun yang dibutuhkan.
-- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder).
-
-STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
-1. DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun) demi kenyamanan pengguna tuna netra dan pembaca layar (screen reader).
-2. JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa.
-3. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
-4. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
-5. Jawaban harus komprehensif, edukatif, dan to the point.`;
+- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat pengingat/reminder, panggil tool tersebut dan jawab secara santai.
+- JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa.`;
 
         let replyText = '';
         const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
         if (intentRes.handled && intentRes.replyText) {
-          replyText = stripEmojis(intentRes.replyText);
+          replyText = intentRes.replyText;
         } else {
           const agentRes = await runConversationalAgent(
             env,
@@ -624,7 +611,7 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
             },
             systemPrompt
           );
-          replyText = stripEmojis(agentRes.replyText);
+          replyText = agentRes.replyText;
         }
 
         const updatedHistory: ChatMessage[] = [
