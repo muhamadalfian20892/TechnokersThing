@@ -147,10 +147,24 @@ function splitMessageIntoChunks(text: string, maxChunkLength: number): string[] 
   return chunks;
 }
 
+export interface TelegramFile {
+  file_id: string;
+  file_unique_id: string;
+  file_size?: number;
+  file_path?: string;
+}
+
 export async function sendChatAction(
   token: string,
   chatId: string | number,
-  action: 'typing' | 'upload_photo' | 'record_video' = 'typing'
+  action:
+    | 'typing'
+    | 'upload_photo'
+    | 'record_video'
+    | 'upload_video'
+    | 'record_voice'
+    | 'upload_voice'
+    | 'choose_sticker' = 'typing'
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${token}/sendChatAction`;
   try {
@@ -161,6 +175,38 @@ export async function sendChatAction(
     });
   } catch (err) {
     console.error('Error sending chat action:', err);
+  }
+}
+
+export async function getTelegramFile(
+  token: string,
+  fileId: string
+): Promise<TelegramResponse<TelegramFile>> {
+  const url = `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`;
+  try {
+    const res = await fetch(url);
+    return (await res.json()) as TelegramResponse<TelegramFile>;
+  } catch (err) {
+    console.error('Error in getTelegramFile:', err);
+    return { ok: false, description: String(err) };
+  }
+}
+
+export async function downloadTelegramFile(
+  token: string,
+  filePath: string
+): Promise<{ ok: boolean; buffer?: ArrayBuffer; error?: string }> {
+  const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      return { ok: false, error: `Telegram file download failed: ${res.status} ${res.statusText}` };
+    }
+    const buffer = await res.arrayBuffer();
+    return { ok: true, buffer };
+  } catch (err) {
+    console.error('Error downloading Telegram file:', err);
+    return { ok: false, error: String(err) };
   }
 }
 

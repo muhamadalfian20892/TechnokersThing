@@ -373,7 +373,7 @@ export async function processReminderIntent(
         await clearPendingReminder(env.AI_NEWS_KV, pendingKey);
         return {
           handled: true,
-          replyText: '❌ <b>Pengingat Dibatalkan</b>\n\nPermintaan pengaturan pengingat ke Telegram telah dibatalkan.',
+          replyText: '<b>Pengingat Dibatalkan</b>\n\nPermintaan pengaturan pengingat ke Telegram telah dibatalkan.',
         };
       }
 
@@ -403,18 +403,18 @@ export async function processReminderIntent(
         return {
           handled: true,
           replyText:
-            `✅ <b>Siap! Pengingat Berhasil Diatur ke Telegram!</b>\n\n` +
-            `📌 <b>Pesan:</b> ${escapeHtml(pending.message)}\n` +
-            `⏰ <b>Waktu:</b> ${pending.humanDescription || pending.scheduleRaw}\n` +
-            `🎯 <b>Tujuan:</b> Akun Telegram <b>${resolved.label}</b> (ID: <code>${resolved.chatId}</code>)\n` +
-            `🆔 <b>Job ID:</b> <code>${newJob.id}</code>\n\n` +
-            `🔔 Notifikasi akan dikirimkan langsung ke Telegram kamu tepat pada waktunya!`,
+            `<b>Siap! Pengingat Berhasil Diatur ke Telegram!</b>\n\n` +
+            `• <b>Pesan:</b> ${escapeHtml(pending.message)}\n` +
+            `• <b>Waktu:</b> ${pending.humanDescription || pending.scheduleRaw}\n` +
+            `• <b>Tujuan:</b> Akun Telegram <b>${resolved.label}</b> (ID: <code>${resolved.chatId}</code>)\n` +
+            `• <b>ID:</b> <code>${newJob.id}</code>\n\n` +
+            `Notifikasi akan dikirimkan langsung ke Telegram kamu tepat pada waktunya!`,
         };
       } else {
         return {
           handled: true,
           replyText:
-            `⚠️ <b>Akun Telegram Tidak Ditemukan</b>\n\n` +
+            `<b>Akun Telegram Tidak Ditemukan</b>\n\n` +
             `Sistem belum menemukan akun <code>${escapeHtml(trimmed)}</code>. ` +
             `Pastikan Anda sudah pernah mengirim pesan ke bot kami di Telegram (<a href="https://t.me/tckn_bot">@tckn_bot</a>) atau masukkan Chat ID numerik Anda.\n\n` +
             `<i>(Ketik "batal" jika ingin membatalkan pengingat)</i>`,
@@ -448,7 +448,7 @@ export async function processReminderIntent(
     return {
       handled: true,
       replyText:
-        `⚠️ <b>Format Pengingat Kurang Jelas</b>\n\n` +
+        `<b>Format Pengingat Kurang Jelas</b>\n\n` +
         `Silakan sebutkan waktu dan pesannya secara spesifik, misalnya:\n` +
         `• <i>"ingetin buat makan 3 menit lagi ya"</i>\n` +
         `• <i>"ingetin makan 3 menit lagi, ingetinnya disini aja"</i>\n` +
@@ -500,7 +500,7 @@ export async function processReminderIntent(
           return {
             handled: true,
             replyText:
-              `⚠️ <b>Akun Telegram ${escapeHtml(explicitUser)} Belum Terdaftar</b>\n\n` +
+              `<b>Akun Telegram ${escapeHtml(explicitUser)} Belum Terdaftar</b>\n\n` +
               `Pastikan akun tersebut sudah pernah berinteraksi dengan bot di <a href="https://t.me/tckn_bot">@tckn_bot</a> atau masukkan ID numerik Telegram Anda.`,
           };
         }
@@ -521,7 +521,7 @@ export async function processReminderIntent(
         return {
           handled: true,
           replyText:
-            `🤖 <b>Telegram kamu yang mana?</b>\n\n` +
+            `<b>Telegram kamu yang mana?</b>\n\n` +
             `Silakan masukkan username Telegram kamu (contoh: <code>@alfian04121</code>) atau Chat ID kamu agar pengingat <i>"${escapeHtml(parseResult.message)}"</i> bisa dikirimkan langsung ke sana.\n\n` +
             `<i>(Ketik "batal" jika ingin membatalkan)</i>`,
         };

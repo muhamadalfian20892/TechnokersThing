@@ -60,6 +60,7 @@ import {
 import { parseScheduleInput } from './scheduler/parser';
 import { ScheduledJob } from './scheduler/types';
 import { ChatMessage } from './news/types';
+import { transcribeAudio } from './news/transcriber';
 
 // Pipeline to execute daily news posting to the channel
 export async function executeDailyNewsPosting(
@@ -499,7 +500,8 @@ export default {
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
 - Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
-- Sambut admin dengan hangat dan bantu apa pun yang dibutuhkan (analisis tech, kode, ringkasan, maupun konfigurasi bot).
+- Sambut admin dengan hangat jika ini pesan pertama, dan bantu apa pun yang dibutuhkan (analisis tech, kode, ringkasan, maupun konfigurasi bot).
+- ATURAN MENYAPA (PENTING): JANGAN PERNAH mengulang sapaan pembuka "Halo Muhamad" di setiap respons pesan jika percakapan sedang berlangsung! Langsung tanggapi dan jawab intinya secara cerdas dan to-the-point.
 - Jika admin bertanya seputar menyambungkan ke Google, Blogger, Gmail, atau Webhook, jelaskan bahwa ia dapat mengisi kredensial pada tab Universal Connectors di dashboard ini.
 - Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder). Jika pengguna ingin membuat reminder/pengingat atau cron job, panggil tool tersebut atau tanyakan konfirmasi secara ramah!
 - Jika pengguna meminta pengingat "disini", kirimkan ke 'web_dashboard'. Jika minta di Telegram, tanyakan username atau chat id Telegram jika belum tersedia.
@@ -547,6 +549,99 @@ STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
         });
       } catch (err: any) {
         return Response.json({ ok: false, error: err.message || 'Gagal memproses pesan chat' }, { status: 500 });
+      }
+    }
+
+    // Direct Web Chat API: Send voice message & receive reply
+    if (url.pathname === '/api/dashboard/chat/voice' && request.method === 'POST') {
+      if (!isAuthenticated) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      try {
+        const contentType = request.headers.get('content-type') || '';
+        let audioBuffer: ArrayBuffer;
+        let mimeType = 'audio/webm';
+
+        if (contentType.includes('multipart/form-data')) {
+          const formData = await request.formData();
+          const file = formData.get('audio') as File | null;
+          if (!file) {
+            return Response.json({ ok: false, error: 'File audio tidak ditemukan.' }, { status: 400 });
+          }
+          audioBuffer = await file.arrayBuffer();
+          mimeType = file.type || 'audio/webm';
+        } else {
+          audioBuffer = await request.arrayBuffer();
+          mimeType = contentType || 'audio/webm';
+        }
+
+        if (audioBuffer.byteLength === 0) {
+          return Response.json({ ok: false, error: 'Audio kosong.' }, { status: 400 });
+        }
+
+        const transcription = await transcribeAudio(env, audioBuffer, mimeType);
+        const userMessage = (transcription.text || '').trim();
+
+        if (!userMessage) {
+          return Response.json({
+            ok: false,
+            error: 'Tidak ada kata atau ucapan yang terdengar jelas dari rekaman suara.',
+          });
+        }
+
+        const adminSessionKey = 'web:admin:1023972475';
+        const history = await getIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey);
+
+        const systemPrompt = `Kamu adalah Technokers AI Assistant, asisten cerdas yang ramah, berwawasan luas, dan ahli di bidang Artificial Intelligence, Machine Learning, teknologi masa depan, dan pemrograman.
+KONTEKS PENGGUNA TERISOLASI:
+- Kamu sedang mengobrol langsung dengan Pengelola Utama: Muhamad Alfian (@alfian04121) melalui Konsol Web Dashboard.
+- Sesi obrolan ini sepenuhnya terisolasi untuk sesi admin web ini.
+- Pengguna mengirimkan pesan melalui REKAMAN SUARA (Voice Message) yang telah ditranskripsikan.
+- Sambut admin dengan hangat dan bantu apa pun yang dibutuhkan.
+- Kamu memiliki kapabilitas Function Calling mandiri (set_reminder, set_cron_job, list_reminders, delete_reminder).
+
+STANDAR AKSESIBILITAS KONTEN (WCAG 2.1 AAA & SCREEN READER):
+1. DILARANG KERAS MENGGUNAKAN EMOJI SAMA SEKALI (tidak boleh ada emotikon, ikon, atau simbol grafis apa pun) demi kenyamanan pengguna tuna netra dan pembaca layar (screen reader).
+2. JANGAN SEBUTKAN nomor ID/hash teknis atau kode sistem internal saat menjawab obrolan atau mengonfirmasi pengingat! Bicaralah secara santai dan ramah seperti teman biasa.
+3. Berikan format teks terstruktur yang sangat rapi, jelas, dan kontras.
+4. Gunakan tag format HTML (<b>tebal</b>, <i>miring</i>, <code>kode</code>) atau bullet points agar mudah dibaca dan diakses screen reader.
+5. Jawaban harus komprehensif, edukatif, dan to the point.`;
+
+        let replyText = '';
+        const intentRes = await processConnectorIntent(env.AI_NEWS_KV, userMessage);
+        if (intentRes.handled && intentRes.replyText) {
+          replyText = stripEmojis(intentRes.replyText);
+        } else {
+          const agentRes = await runConversationalAgent(
+            env,
+            history,
+            userMessage,
+            {
+              env,
+              userId: 1023972475,
+              userName: 'Muhamad Alfian',
+              chatId: 1023972475,
+              sourcePlatform: 'web_dashboard',
+              isAdmin: true,
+            },
+            systemPrompt
+          );
+          replyText = stripEmojis(agentRes.replyText);
+        }
+
+        const updatedHistory: ChatMessage[] = [
+          ...history,
+          { role: 'user', content: userMessage, timestamp: Date.now() },
+          { role: 'assistant', content: replyText, timestamp: Date.now() },
+        ];
+        await saveIsolatedChatHistory(env.AI_NEWS_KV, adminSessionKey, updatedHistory);
+
+        return Response.json({
+          ok: true,
+          transcription: userMessage,
+          reply: replyText,
+          history: updatedHistory,
+        });
+      } catch (err: any) {
+        return Response.json({ ok: false, error: err.message || 'Gagal memproses pesan suara' }, { status: 500 });
       }
     }
 
@@ -1429,15 +1524,30 @@ function renderAdminDashboard(data: {
         <div id="typingIndicator" class="chat-typing" aria-live="polite">🤖 Technokers AI sedang berpikir dan mengetik...</div>
 
         <div>
-          <label for="chatInput">Ketik Pesan:</label>
-          <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+          <label for="chatInput">Ketik Pesan atau Rekam Pesan Suara:</label>
+          <div style="display: flex; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap;">
             <textarea
               id="chatInput"
               rows="2"
-              placeholder="Ketik pertanyaan atau perintah Anda di sini... (Tekan Enter untuk kirim, Shift+Enter untuk baris baru)"
+              placeholder="Ketik pertanyaan atau klik Rekam Suara... (Tekan Enter untuk kirim, Shift+Enter untuk baris baru)"
               aria-label="Pesan untuk asisten AI"
+              style="flex: 1; min-width: 250px; margin-bottom: 0;"
             ></textarea>
-            <button id="btnSendChat" class="btn btn-primary" onclick="sendWebChat()" aria-label="Kirim pesan chat">Kirim</button>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <button
+                id="btnRecordVoice"
+                type="button"
+                class="btn btn-secondary"
+                onclick="toggleVoiceRecording()"
+                aria-label="Rekam pesan suara"
+                style="border-color: #38bdf8;"
+              >
+                🎤 Rekam Suara
+              </button>
+              <button id="btnSendChat" class="btn btn-primary" onclick="sendWebChat()" aria-label="Kirim pesan chat">
+                Kirim
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -1739,6 +1849,110 @@ function renderAdminDashboard(data: {
           const chatBox = document.getElementById('chatBox');
           chatBox.innerHTML = '<div class="chat-message chat-assistant"><div class="chat-sender">🤖 Technokers AI</div><div>Riwayat percakapan telah dibersihkan. Silakan mulai topik baru!</div></div>';
         }
+      }
+    }
+
+    // Client-Side Voice Recording & Transcription Handlers
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+
+    async function toggleVoiceRecording() {
+      const btn = document.getElementById('btnRecordVoice');
+      const typing = document.getElementById('typingIndicator');
+
+      if (!isRecording) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) audioChunks.push(e.data);
+          };
+          mediaRecorder.onstop = async () => {
+            stream.getTracks().forEach((track) => track.stop());
+            const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            await sendVoiceChat(audioBlob);
+          };
+          mediaRecorder.start();
+          isRecording = true;
+          btn.style.background = '#b91c1c';
+          btn.style.borderColor = '#f87171';
+          btn.textContent = '⏹ Selesai / Kirim';
+          btn.setAttribute('aria-label', 'Hentikan rekaman dan kirim pesan suara');
+          if (typing) {
+            typing.style.display = 'block';
+            typing.textContent = '🎤 Sedang merekam suara Anda... Bicaralah sekarang, lalu klik tombol ini untuk mengirim.';
+          }
+        } catch (err) {
+          alert('Tidak dapat mengakses mikrofon browser: ' + err.message);
+        }
+      } else {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+          mediaRecorder.stop();
+        }
+        isRecording = false;
+        btn.style.background = '#1e293b';
+        btn.style.borderColor = '#38bdf8';
+        btn.textContent = '🎤 Rekam Suara';
+        btn.setAttribute('aria-label', 'Rekam pesan suara');
+        if (typing) {
+          typing.style.display = 'block';
+          typing.textContent = '🤖 Technokers AI sedang memproses & mentranskripsikan suara Anda...';
+        }
+      }
+    }
+
+    async function sendVoiceChat(blob) {
+      const chatBox = document.getElementById('chatBox');
+      const typing = document.getElementById('typingIndicator');
+      const btnSend = document.getElementById('btnSendChat');
+      const btnVoice = document.getElementById('btnRecordVoice');
+
+      btnSend.disabled = true;
+      btnVoice.disabled = true;
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', blob, 'voice.webm');
+
+        const res = await fetch('/api/dashboard/chat/voice', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        typing.style.display = 'none';
+        btnSend.disabled = false;
+        btnVoice.disabled = false;
+
+        if (!data.ok) {
+          alert(data.error || 'Gagal memproses pesan suara');
+          return;
+        }
+
+        // Append user bubble with voice indication
+        const userBubble = document.createElement('div');
+        userBubble.className = 'chat-message chat-user';
+        userBubble.innerHTML =
+          '<div class="chat-sender">👑 Admin (Pesan Suara)</div><div>' +
+          escapeHtml(data.transcription) +
+          '</div>';
+        chatBox.appendChild(userBubble);
+
+        // Append AI assistant reply
+        const botBubble = document.createElement('div');
+        botBubble.className = 'chat-message chat-assistant';
+        botBubble.innerHTML =
+          '<div class="chat-sender">🤖 Technokers AI</div><div>' +
+          (data.reply ? data.reply.replace(/\\n/g, '<br>') : 'Terjadi kesalahan sistem.') +
+          '</div>';
+        chatBox.appendChild(botBubble);
+        scrollChatToBottom();
+      } catch (err) {
+        typing.style.display = 'none';
+        btnSend.disabled = false;
+        btnVoice.disabled = false;
+        alert('Gagal mengirim rekaman suara: ' + err.message);
       }
     }
 

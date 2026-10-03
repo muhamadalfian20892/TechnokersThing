@@ -1,4 +1,9 @@
-import { sendTelegramMessage, sendChatAction } from './api';
+import {
+  sendTelegramMessage,
+  sendChatAction,
+  getTelegramFile,
+  downloadTelegramFile,
+} from './api';
 import { fetchLatestAINews } from '../news/fetcher';
 import {
   filterUnpostedNews,
@@ -47,6 +52,26 @@ import { parseScheduleInput } from '../scheduler/parser';
 import { ScheduledJob } from '../scheduler/types';
 import { ChatMessage } from '../news/types';
 import { stripEmojis, escapeHtml } from '../utils/text';
+import { transcribeAudio } from '../news/transcriber';
+
+export interface TelegramVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+}
+
+export interface TelegramAudio {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  performer?: string;
+  title?: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
 
 export interface TelegramUpdate {
   update_id: number;
@@ -68,6 +93,9 @@ export interface TelegramUpdate {
     };
     date: number;
     text?: string;
+    caption?: string;
+    voice?: TelegramVoice;
+    audio?: TelegramAudio;
   };
 }
 
@@ -76,38 +104,141 @@ export async function handleTelegramUpdate(
   env: Env
 ): Promise<void> {
   const msg = update.message;
-  if (!msg || !msg.text) return;
+  if (!msg) return;
 
   const chatId = msg.chat.id;
   const userId = msg.from?.id || chatId;
   const threadId = msg.message_thread_id;
-  const text = msg.text.trim();
   const userName = msg.from?.first_name || 'Teman';
   const userHandle = msg.from?.username ? `@${msg.from.username}` : '';
   const token = env.TELEGRAM_TOKEN;
 
-  // Track profile and isolated session key per user and per thread
-  await upsertUserProfile(env.AI_NEWS_KV, userId, {
-    firstName: msg.from?.first_name,
-    lastName: msg.from?.last_name,
-    username: msg.from?.username,
-  });
+  try {
+    // Track profile and isolated session key per user and per thread
+    await upsertUserProfile(env.AI_NEWS_KV, userId, {
+      firstName: msg.from?.first_name,
+      lastName: msg.from?.last_name,
+      username: msg.from?.username,
+    });
 
-  const sessionKey = buildChatSessionKey(chatId, userId, threadId);
+    const sessionKey = buildChatSessionKey(chatId, userId, threadId);
 
-  // Rate Limiting Protection (Anti-Flood)
-  const rateLimit = await checkRateLimit(env.AI_NEWS_KV, userId, 25);
-  if (!rateLimit.allowed) {
-    await sendTelegramMessage(
-      token,
-      chatId,
-      `⚠️ <b>Batas Kecepatan Terlampaui</b>\n\nAnda mengirim pesan terlalu cepat. Harap beri jeda sejenak sebelum mengirim pesan kembali.`
+    // Rate Limiting Protection (Anti-Flood)
+    const rateLimit = await checkRateLimit(env.AI_NEWS_KV, userId, 25);
+    if (!rateLimit.allowed) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Batas Kecepatan Terlampaui</b>\n\nAnda mengirim pesan terlalu cepat. Harap beri jeda sejenak sebelum mengirim pesan kembali.`
+      );
+      return;
+    }
+
+    const userIsAdmin = await isUserAdmin(env.AI_NEWS_KV, userId);
+    const { dateStr, formattedDate, isFriday } = getWibInfo();
+
+    // Voice message detection and audio speech-to-text processing
+    const voice = msg.voice;
+    const audio = msg.audio;
+    const hasVoice = !!(voice || audio);
+    let rawText = msg.text ? msg.text.trim() : (msg.caption ? msg.caption.trim() : '');
+
+    // If message has neither text nor voice/audio (e.g. sticker, photo without caption, etc.)
+    if (!rawText && !hasVoice) {
+      if (msg.chat.type === 'private') {
+        await sendTelegramMessage(
+          token,
+          chatId,
+          `<b>Technokers AI Bot</b> menerima pesan teks dan rekaman pesan suara (voice message).\n\n` +
+            `Silakan ketik pertanyaan Anda atau kirimkan pesan suara (voice note) untuk bertanya seputar kecerdasan buatan, teknologi, dan pemrograman!`
+        );
+      }
+      return;
+    }
+
+  let isVoiceMessage = false;
+  let voiceTranscriptionText = '';
+
+  if (hasVoice) {
+    // Non-admin daily quota check before downloading audio
+    const quotaCheck = await checkUserChatPermission(env.AI_NEWS_KV, userId, dateStr);
+    if (!quotaCheck.allowed) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Batas Chat Harian Tercapai (${quotaCheck.count}/${quotaCheck.limit})</b>\n\n` +
+          `Anda telah menggunakan seluruh kuota chat (${quotaCheck.limit} pesan) untuk hari ini.\n` +
+          `Kuota akan direset kembali besok pada pukul 00:00 WIB.\n\n` +
+          `Tetap ikuti perkembangan berita AI terlengkap di channel <a href="https://t.me/aicomindo">@aicomindo</a>!`
+      );
+      return;
+    }
+
+    const audioObj = voice || audio!;
+    const fileSize = audioObj.file_size || 0;
+
+    // Telegram Bot API limit is 20MB
+    if (fileSize > 20 * 1024 * 1024) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Ukuran Audio Terlalu Besar</b>\n\nUkuran file audio melebihi batas 20 MB. Harap kirimkan rekaman suara yang lebih ringkas.`
+      );
+      return;
+    }
+
+    // Send action indicating voice note is being processed
+    await sendChatAction(token, chatId, 'record_voice');
+
+    // 1. Get file path from Telegram Bot API
+    const fileRes = await getTelegramFile(token, audioObj.file_id);
+    if (!fileRes.ok || !fileRes.result?.file_path) {
+      console.error('Failed to get Telegram file info:', fileRes.description);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Gagal Mengunduh Pesan Suara</b>\n\nTidak dapat mengambil berkas audio dari server Telegram. Silakan coba kirim kembali.`
+      );
+      return;
+    }
+
+    // 2. Download audio file bytes
+    const downloadRes = await downloadTelegramFile(token, fileRes.result.file_path);
+    if (!downloadRes.ok || !downloadRes.buffer) {
+      console.error('Failed to download audio bytes:', downloadRes.error);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Gagal Membaca Audio</b>\n\nTerjadi kendala jaringan saat mengunduh pesan suara. Silakan coba kembali beberapa saat lagi.`
+      );
+      return;
+    }
+
+    // 3. Transcribe speech to text with dual-engine failover
+    const transcription = await transcribeAudio(
+      env,
+      downloadRes.buffer,
+      audioObj.mime_type || (voice ? 'audio/ogg' : 'audio/mp3')
     );
-    return;
+
+    if (!transcription.text || transcription.text.trim().length === 0) {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Pesan Suara Diterima</b>\n\nNamun tidak ada kata atau ucapan yang terdengar jelas. Silakan coba rekam kembali pesan suara Anda di tempat yang tenang dengan artikulasi yang lebih jelas.`
+      );
+      return;
+    }
+
+    voiceTranscriptionText = transcription.text.trim();
+    rawText = rawText ? `${voiceTranscriptionText}. ${rawText}` : voiceTranscriptionText;
+    isVoiceMessage = true;
   }
 
-  const userIsAdmin = await isUserAdmin(env.AI_NEWS_KV, userId);
-  const { dateStr, formattedDate, isFriday } = getWibInfo();
+  const text = rawText.trim();
+  const voicePrefix = isVoiceMessage
+    ? `<b>Transkripsi Pesan Suara:</b>\n<i>"${escapeHtml(voiceTranscriptionText)}"</i>\n\n`
+    : '';
 
   // ==========================================
   // NON-ADMIN RESTRICTION CHECK
@@ -130,23 +261,35 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `⛔ <b>Akses Dibatasi</b>\n\n` +
+      voicePrefix +
+        `<b>Akses Dibatasi</b>\n\n` +
         `Perintah administratif ini khusus untuk Pengelola (@alfian04121).\n` +
         `Pengguna umum dapat menggunakan chat interaktif AI dan perintah <code>/news</code>.\n\n` +
-        `📢 Kunjungi channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
+        `Kunjungi channel resmi: <a href="https://t.me/aicomindo">Komunitas AI Indonesia @aicomindo</a>.`
     );
     return;
   }
 
   // ==========================================
-  // PUBLIC COMMAND: /reset & /clearchat
+  // PUBLIC COMMAND: /reset & /clearchat (Text or Voice)
   // ==========================================
-  if (text.startsWith('/reset') || text.startsWith('/clearchat')) {
+  const isResetIntent =
+    text.startsWith('/reset') ||
+    text.startsWith('/clearchat') ||
+    (isVoiceMessage &&
+      (text.toLowerCase().includes('reset chat') ||
+        text.toLowerCase().includes('hapus chat') ||
+        text.toLowerCase().includes('bersihkan chat') ||
+        text.toLowerCase().includes('hapus riwayat') ||
+        text.toLowerCase().includes('hapus obrolan')));
+
+  if (isResetIntent) {
     await clearIsolatedChatHistory(env.AI_NEWS_KV, sessionKey);
     await sendTelegramMessage(
       token,
       chatId,
-      `🧹 <b>Memori Obrolan Direset</b>\n\n` +
+      voicePrefix +
+        `<b>Memori Obrolan Direset</b>\n\n` +
         `Riwayat percakapan khusus untuk Anda di sesi ini telah dibersihkan. Anda dapat memulai topik obrolan baru dengan asisten AI!`
     );
     return;
@@ -237,14 +380,24 @@ export async function handleTelegramUpdate(
   }
 
   // ==========================================
-  // PUBLIC COMMAND: /news
+  // PUBLIC COMMAND: /news (Text or Voice)
   // ==========================================
-  if (text.startsWith('/news')) {
+  const isNewsIntent =
+    text.startsWith('/news') ||
+    (isVoiceMessage &&
+      (text.toLowerCase() === 'berita hari ini' ||
+        text.toLowerCase().includes('berita ai terbaru') ||
+        text.toLowerCase().includes('ada berita apa') ||
+        text.toLowerCase().includes('ringkasan berita') ||
+        text.toLowerCase().includes('rangkuman berita')));
+
+  if (isNewsIntent) {
     await sendChatAction(token, chatId, 'typing');
     await sendTelegramMessage(
       token,
       chatId,
-      `🔍 <i>Sedang mengumpulkan berita AI global terbaru dan menyusun rangkuman mendalam...</i>`
+      voicePrefix +
+        `<i>Sedang mengumpulkan berita AI global terbaru dan menyusun rangkuman mendalam...</i>`
     );
 
     try {
@@ -254,10 +407,14 @@ export async function handleTelegramUpdate(
       const itemsToPost = unposted.length > 0 ? unposted.slice(0, targetCount) : candidates.slice(0, targetCount);
       const digest = await generateDailyNewsDigest(env, itemsToPost, isFriday);
 
-      await sendTelegramMessage(token, chatId, digest);
+      await sendTelegramMessage(token, chatId, voicePrefix + digest);
     } catch (err) {
       console.error('Error in /news command:', err);
-      await sendTelegramMessage(token, chatId, `⚠️ Maaf, ada kendala saat menyusun berita. Silakan coba kembali nanti.`);
+      await sendTelegramMessage(
+        token,
+        chatId,
+        voicePrefix + `Maaf, ada kendala saat menyusun berita. Silakan coba kembali nanti.`
+      );
     }
     return;
   }
@@ -268,14 +425,14 @@ export async function handleTelegramUpdate(
   if (text.startsWith('/connectors')) {
     const list = await getAllConnectors(env.AI_NEWS_KV);
     const summary = list
-      .map((c) => `• <b>${c.name}</b> (${c.type}): ${c.enabled ? '🟢 Aktif' : '⚪ Nonaktif'}\n  <i>${c.description || ''}</i>`)
+      .map((c) => `• <b>${c.name}</b> (${c.type}): ${c.enabled ? '[Aktif]' : '[Nonaktif]'}\n  <i>${c.description || ''}</i>`)
       .join('\n\n');
 
     await sendTelegramMessage(
       token,
       chatId,
-      `🔌 <b>Universal Connectors Status:</b>\n\n${summary}\n\n` +
-        `💡 <b>Pengaturan Mandiri:</b>\n` +
+      `<b>Universal Connectors Status:</b>\n\n${summary}\n\n` +
+        `<b>Pengaturan Mandiri:</b>\n` +
         `Anda dapat mengonfigurasi Blog ID, Access Token Google Blogger, dan Webhooks langsung di <b>Web Dashboard</b> (tab Connectors).\n` +
         `Atau katakan saja di chat: <i>"sambungin ke blogger"</i> atau <i>"sambungin ke gmail"</i>!`
     );
@@ -329,7 +486,8 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `<b>Pengingat (Reminder) Berhasil Diatur</b>\n\n` +
+      voicePrefix +
+        `<b>Pengingat (Reminder) Berhasil Diatur</b>\n\n` +
         `Pesan: ${escapeHtml(newJob.message)}\n` +
         `Waktu: ${parsed.humanDescription || parsed.scheduleRaw}\n` +
         `ID Jadwal: <code>${newJob.id}</code>\n\n` +
@@ -390,7 +548,8 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `<b>Jadwal Otomatis (Cron Job) Aktif</b>\n\n` +
+      voicePrefix +
+        `<b>Jadwal Otomatis (Cron Job) Aktif</b>\n\n` +
         `Pesan: ${escapeHtml(newJob.message)}\n` +
         `Jadwal: ${parsed.humanDescription || parsed.scheduleRaw}\n` +
         `Pola Cron: <code>${newJob.cronExpression}</code>\n` +
@@ -448,7 +607,7 @@ export async function handleTelegramUpdate(
   if (userIsAdmin) {
     const connectorIntent = await processConnectorIntent(env.AI_NEWS_KV, text);
     if (connectorIntent.handled && connectorIntent.replyText) {
-      await sendTelegramMessage(token, chatId, connectorIntent.replyText);
+      await sendTelegramMessage(token, chatId, voicePrefix + connectorIntent.replyText);
       return;
     }
   }
@@ -461,11 +620,11 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `🔑 <b>Kode Otentikasi Web Dashboard</b>\n\n` +
-        `Kode Akses Anda:\n👉 <code>${otpCode}</code>\n\n` +
-        `⏳ <b>Masa Berlaku:</b> 5 Menit\n` +
-        `🛡️ <b>Keamanan:</b> Sekali pakai (langsung hangus setelah login). Maksimal 3x percobaan gagal sebelum dikunci.\n\n` +
-        `🌐 Buka Dashboard:\n<a href="https://technokersthing.hafiyanajah.workers.dev">Akses Dashboard Web di Sini</a>`
+      `<b>Kode Otentikasi Web Dashboard</b>\n\n` +
+        `Kode Akses Anda:\n<code>${otpCode}</code>\n\n` +
+        `<b>Masa Berlaku:</b> 5 Menit\n` +
+        `<b>Keamanan:</b> Sekali pakai (langsung hangus setelah login). Maksimal 3x percobaan gagal sebelum dikunci.\n\n` +
+        `Buka Dashboard:\n<a href="https://technokersthing.hafiyanajah.workers.dev">Akses Dashboard Web di Sini</a>`
     );
     return;
   }
@@ -477,7 +636,7 @@ export async function handleTelegramUpdate(
       await sendTelegramMessage(
         token,
         chatId,
-        `⚠️ Format salah. Contoh:\n<code>/setlimit 40</code> (40 chat/hari)\n<code>/setlimit 0</code> (Nonaktifkan limit)`
+        `Format salah. Contoh:\n<code>/setlimit 40</code> (40 chat/hari)\n<code>/setlimit 0</code> (Nonaktifkan limit)`
       );
       return;
     }
@@ -487,7 +646,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `✅ <b>Limit Chat Berhasil Diperbarui!</b>\n\nBatas chat untuk pengguna umum sekarang: <b>${desc}</b>.`
+      `<b>Sukses: Limit Chat Berhasil Diperbarui!</b>\n\nBatas chat untuk pengguna umum sekarang: <b>${desc}</b>.`
     );
     return;
   }
@@ -495,7 +654,7 @@ export async function handleTelegramUpdate(
   if (text.startsWith('/getlimit')) {
     const currentLimit = await getDailyChatLimit(env.AI_NEWS_KV);
     const desc = currentLimit === 0 ? 'Nonaktif (Unlimited)' : `${currentLimit} chat per hari`;
-    await sendTelegramMessage(token, chatId, `📊 <b>Pengaturan Limit Saat Ini:</b> <b>${desc}</b>.`);
+    await sendTelegramMessage(token, chatId, `<b>Pengaturan Limit Saat Ini:</b> <b>${desc}</b>.`);
     return;
   }
 
@@ -761,7 +920,7 @@ export async function handleTelegramUpdate(
     await sendTelegramMessage(
       token,
       chatId,
-      `⚠️ <b>Batas Chat Harian Tercapai (${chatPerm.count}/${chatPerm.limit})</b>\n\n` +
+      `<b>Batas Chat Harian Tercapai (${chatPerm.count}/${chatPerm.limit})</b>\n\n` +
         `Anda telah menggunakan seluruh kuota chat (${chatPerm.limit} pesan) untuk hari ini.\n` +
         `Kuota akan direset kembali besok pada pukul 00:00 WIB.\n\n` +
         `Tetap ikuti perkembangan berita AI terlengkap di channel <a href="https://t.me/aicomindo">@aicomindo</a>!`
@@ -782,7 +941,10 @@ export async function handleTelegramUpdate(
 KONTEKS PENGGUNA TERISOLASI:
 - Kamu sedang berbicara secara privat dengan pengguna bernama "${userName}" (${userHandle || 'ID: ' + userId}).
 - Sesi percakapan ini sepenuhnya terisolasi dan spesifik untuk pengguna ini. JANGAN PERNAH mencampur adukkan topik atau data dari pengguna lain!
-- Panggil nama pengguna dengan ramah jika relevan ("Halo ${userName}", dll).
+- ATURAN MENYAPA (PENTING):
+  * JANGAN PERNAH mengulang salam atau sapaan nama pengguna ("Halo ${userName}", "Hai ${userName}", dll.) di setiap balasan jika percakapan sedang berlangsung!
+  * Sapa nama pengguna HANYA jika percakapan benar-benar baru pertama kali dimulai atau pengguna menyapa salam di pesan pembukanya ("halo", "hai", dll).
+  * Jika percakapan sedang berjalan atau pengguna menanyakan topik/pertanyaan, LANGSUNG jawab pertanyaan secara to-the-point, jelas, mengalir santai, dan cerdas tanpa mengulang sapaan pembuka di setiap pesan.
 - Jika pengguna meminta pengingat atau menyebut kegiatan yang akan datang, kamu dapat memutuskan secara mandiri apakah harus memanggil tool 'set_reminder' atau bertanya secara ramah apakah mereka mau diingatkan!
 
 STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
@@ -818,7 +980,7 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
     ];
     await saveIsolatedChatHistory(env.AI_NEWS_KV, sessionKey, updatedHistory);
 
-    await sendTelegramMessage(token, chatId, replyText, {
+    await sendTelegramMessage(token, chatId, voicePrefix + replyText, {
       replyToMessageId: msg.message_id,
     });
   } catch (err) {
@@ -829,5 +991,15 @@ STANDAR AKSESIBILITAS TEKS (WCAG 2.1 AAA):
       'Maaf, layanan AI sedang sibuk atau mengalami kendala jaringan. Silakan coba beberapa saat lagi.',
       { replyToMessageId: msg.message_id }
     );
+  }
+  } catch (globalErr) {
+    console.error('[handleTelegramUpdate] Unexpected error:', globalErr);
+    try {
+      await sendTelegramMessage(
+        token,
+        chatId,
+        '<b>Kendala Sistem Sementara</b>\n\nMaaf, terjadi kendala teknis saat memproses pesan Anda. Silakan coba beberapa saat lagi.'
+      );
+    } catch {}
   }
 }

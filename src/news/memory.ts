@@ -155,47 +155,47 @@ export async function getUsageStats(kv: KVNamespace, dateStr?: string): Promise<
 // 4. Few-Shot Style Memory System
 // ==========================================
 
-export const DEFAULT_STYLE_FEW_SHOT = `Google Cetak Sejarah! Caplok Wiz $32 Miliar Demi Rajai Keamanan Cloud AI! 🛡️🤝💰
+export const DEFAULT_STYLE_FEW_SHOT = `Google Cetak Sejarah! Caplok Wiz $32 Miliar Demi Rajai Keamanan Cloud AI!
 
 Dua minggu terakhir ini dunia tech bener-bener gak kasih kita napas. Buat kalian yang gak mau pusing ketinggalan info, ini rangkuman 10 gebrakan paling gila yang bakal ngerubah masa depan ekosistem digital kita. Langsung sikat:
 
 1. Google Pecah Rekor: Akuisisi Wiz $32 Miliar!
 Google resmi tutup deal terbesar sepanjang sejarahnya dengan beli perusahaan cybersecurity Wiz. Tujuannya jelas: bikin Google Cloud & Gemini jadi benteng paling aman buat data AI kalian. Google rela keluar Rp 500 Triliun+ cuma buat menangin kepercayaan korporat global.
 
-2. Meta x Broadcom: Perang Chip Lawan Nvidia! 칩⚔️
+2. Meta x Broadcom: Perang Chip Lawan Nvidia!
 Mark Zuckerberg makin serius "cerai" dari Nvidia. Meta gandeng Broadcom buat bikin chip kustom MTIA generasi terbaru. Mereka mau AI-nya makin kenceng di WhatsApp & Instagram tanpa harus ngemis stok GPU ke pihak lain.
 
-3. Spotify vs Lagu AI "Sampah" 🎵🛡️
+3. Spotify vs Lagu AI "Sampah"
 Industri musik makin gerah! Spotify ngerilis Artist Profile Protection. Sekarang, lagu hasil generate suara AI ilegal bakal langsung ditendang sebelum tayang. Ini kemenangan telak buat hak cipta musisi asli.
 
-4. Mozilla Thunderbolt: Bangun Server AI Sendiri di Rumah! ⚡🔓
+4. Mozilla Thunderbolt: Bangun Server AI Sendiri di Rumah!
 Bosen data kalian "diintip" raksasa cloud? Mozilla rilis Thunderbolt, client open-source buat jalanin model AI pinter (kayak Llama) di server sendiri. Privasi total, kedaulatan digital beneran. Lu bisa cek kodenya di git clone https://github.com/mozilla/thunderbolt.
 
-5. Adobe Firefly AI Assistant: Desain Tinggal Ngomong 🎨🤖
+5. Adobe Firefly AI Assistant: Desain Tinggal Ngomong
 Adobe rilis asisten yang nggak cuma bikin gambar, tapi bisa "ngejalanin" Photoshop & Premiere buat kalian secara otomatis. Kerja desain ribet sekarang jadi urusan asisten AI-nya.
 
-6. Gemini for Mac: Fitur "Screen Sharing" Jadi Game Changer! 🧠🍏
+6. Gemini for Mac: Fitur "Screen Sharing" Jadi Game Changer!
 Google Gemini resmi punya aplikasi native buat Mac. Fitur juaranya: Screen Sharing. Gemini bisa liat apa yang kalian buka di layar buat kasih saran koding atau analisis data secara real-time.
 
-7. Anthropic Mythos: AI Hacking Paling Ngeri! 🕵️♂️🔓
+7. Anthropic Mythos: AI Hacking Paling Ngeri!
 Anthropic lagi ngetes model Mythos yang pinter banget nge-hack celah keamanan zero-day di Windows/macOS. Saking bahayanya, Gedung Putih sampe turun tangan ngatur pemakaiannya biar nggak disalahgunakan.
 
-8. Apple Siri Reboot: Bakal Jadi Robot Otonom? 🍎🕶️
+8. Apple Siri Reboot: Bakal Jadi Robot Otonom?
 Bocoran roadmap Apple: Siri bakal punya aplikasi sendiri dan ditenagai AI otonom di iOS 27. Plus, iPhone Lipat & kacamata Vision Air murah siap meluncur 2027!
 
-9. SpaceX IPO $1,75 Triliun: Ambisi Produksi GPU Sendiri! 🚀💰
+9. SpaceX IPO $1,75 Triliun: Ambisi Produksi GPU Sendiri!
 SpaceX resmi ajuin berkas IPO. Elon Musk nggak cuma mau ke Mars, tapi juga mau bikin GPU sendiri buat lepas dari dominasi Nvidia. Valuasinya setara Rp 27.000 Triliun lebih!
 
-10. Nonton Gratis di ChatGPT lewat Integrasi Tubi 🎥🍿
+10. Nonton Gratis di ChatGPT lewat Integrasi Tubi
 Layanan streaming Tubi rilis aplikasi native di dalem ChatGPT. Sekarang kalian bisa nyari film sambil ngobrol dan tonton langsung trailernya tanpa perlu pindah aplikasi.
 
 Pandangan Saya:
 Kita bener-bener lagi transisi dari AI yang cuma "pinter jawab" jadi AI yang "pinter kerja" (Agentic). Dari chip sampe hiburan, semuanya lagi berevolusi gila-gilaan.
 
-Nah, dari 10 berita ini, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih analisis kalian di bawah! 🚀🧪
+Nah, dari 10 berita ini, mana yang menurut kalian paling ngerubah hidup kedepannya? Coba kasih analisis kalian di bawah!
 
 Link Channel: t.me/aicomindo
-#TechRecap #AIUpdate #Google #Meta #Apple #SpaceX #OpenAI #Innovation #FutureOfWork #DigitalSovereignty 🥧⚖️🚀`;
+#TechRecap #AIUpdate #Google #Meta #Apple #SpaceX #OpenAI #Innovation #FutureOfWork #DigitalSovereignty`;
 
 export async function getStyleMemory(kv: KVNamespace): Promise<string> {
   const customStyle = await kv.get('config:style_few_shot');

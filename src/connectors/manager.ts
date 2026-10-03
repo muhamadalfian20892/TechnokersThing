@@ -263,18 +263,18 @@ export async function processConnectorIntent(
       if (!isConfigured) {
         return {
           handled: true,
-          replyText: `📝 <b>Konektor Google Blogger Belum Dikonfigurasi</b>\n\nUntuk mempublikasikan artikel ke Blogger otomatis:\n1. Buka <b>Dashboard Web</b> di https://technokersthing.hafiyanajah.workers.dev\n2. Masuk ke tab <b>Connectors</b>\n3. Masukkan <b>Blog ID</b> dan <b>Google OAuth Access Token</b> Anda.\n\nSetelah tersambung, Anda bisa menyuruh saya memposting artikel kapan saja!`,
+          replyText: `<b>Konektor Google Blogger Belum Dikonfigurasi</b>\n\nUntuk mempublikasikan artikel ke Blogger otomatis:\n1. Buka <b>Dashboard Web</b> di https://technokersthing.hafiyanajah.workers.dev\n2. Masuk ke tab <b>Connectors</b>\n3. Masukkan <b>Blog ID</b> dan <b>Google OAuth Access Token</b> Anda.\n\nSetelah tersambung, Anda bisa menyuruh saya memposting artikel kapan saja!`,
         };
       }
       return {
         handled: true,
-        replyText: `🚀 <b>Konektor Google Blogger Siap!</b>\nBlog ID terhubung: <code>${blogger.params.blogId}</code>.\nAnda bisa memicu publikasi artikel digest harian langsung ke Blogger melalui Dashboard atau perintah admin.`,
+        replyText: `<b>Konektor Google Blogger Siap!</b>\nBlog ID terhubung: <code>${blogger.params.blogId}</code>.\nAnda bisa memicu publikasi artikel digest harian langsung ke Blogger melalui Dashboard atau perintah admin.`,
       };
     }
 
     return {
       handled: true,
-      replyText: `🌐 <b>Status Konektor Google Blogger</b>\n\nStatus: <b>${isConfigured ? '🟢 Tersambung & Aktif' : '🟡 Belum Lengkap (Perlu Konfigurasi)'}</b>\nBlog ID: <code>${blogger?.params.blogId || '(belum diisi)'}</code>\n\n💡 <b>Cara Setup:</b>\nAnda dapat mengonfigurasi Blog ID dan Access Token Google langsung di <b>Dashboard Web</b> (tab Connectors). Setelah aktif, bot dapat langsung membuat dan menerbitkan postingan blog AI otomatis!`,
+      replyText: `<b>Status Konektor Google Blogger</b>\n\nStatus: <b>${isConfigured ? '[Tersambung & Aktif]' : '[Belum Lengkap (Perlu Konfigurasi)]'}</b>\nBlog ID: <code>${blogger?.params.blogId || '(belum diisi)'}</code>\n\n<b>Cara Setup:</b>\nAnda dapat mengonfigurasi Blog ID dan Access Token Google langsung di <b>Dashboard Web</b> (tab Connectors). Setelah aktif, bot dapat langsung membuat dan menerbitkan postingan blog AI otomatis!`,
     };
   }
 
@@ -285,7 +285,7 @@ export async function processConnectorIntent(
 
     return {
       handled: true,
-      replyText: `✉️ <b>Status Konektor Google Gmail</b>\n\nStatus: <b>${isConfigured ? '🟢 Tersambung & Aktif' : '🟡 Belum Diaktifkan'}</b>\nEmail Tujuan: <code>${gmail?.params.recipientEmail || '(belum disetel)'}</code>\n\n💡 <b>Cara Setup:</b>\nAnda dapat menghubungkan akun Google Anda di Dashboard Web untuk mengirimkan notifikasi atau digest harian ke inbox email Anda.`,
+      replyText: `<b>Status Konektor Google Gmail</b>\n\nStatus: <b>${isConfigured ? '[Tersambung & Aktif]' : '[Belum Diaktifkan]'}</b>\nEmail Tujuan: <code>${gmail?.params.recipientEmail || '(belum disetel)'}</code>\n\n<b>Cara Setup:</b>\nAnda dapat menghubungkan akun Google Anda di Dashboard Web untuk mengirimkan notifikasi atau digest harian ke inbox email Anda.`,
     };
   }
 
@@ -293,17 +293,17 @@ export async function processConnectorIntent(
   if (lower.includes('sambungin ke google') || lower.includes('konek google') || lower.includes('connect google')) {
     return {
       handled: true,
-      replyText: `🔗 <b>Universal Google Connectors</b>\n\nBot ini siap disambungkan ke berbagai layanan Google:\n1. <b>Google Blogger:</b> Publikasikan berita dan artikel AI langsung ke blog Anda.\n2. <b>Google Gmail:</b> Kirim rangkuman dan notifikasi ke email.\n3. <b>Google Webhook:</b> Kirim data ke Google Apps Script atau Google Cloud Pub/Sub.\n\n⚙️ <i>Anda dapat mengaktifkan dan mengisi kredensial masing-masing layanan dengan mudah di Dashboard Web pada menu <b>Connectors</b>!</i>`,
+      replyText: `<b>Universal Google Connectors</b>\n\nBot ini siap disambungkan ke berbagai layanan Google:\n1. <b>Google Blogger:</b> Publikasikan berita dan artikel AI langsung ke blog Anda.\n2. <b>Google Gmail:</b> Kirim rangkuman dan notifikasi ke email.\n3. <b>Google Webhook:</b> Kirim data ke Google Apps Script atau Google Cloud Pub/Sub.\n\n<i>Anda dapat mengaktifkan dan mengisi kredensial masing-masing layanan dengan mudah di Dashboard Web pada menu <b>Connectors</b>!</i>`,
     };
   }
 
   // 4. Intent: Connectors List
   if (lower.includes('connectors') || lower.includes('konektor')) {
     const list = await getAllConnectors(kv);
-    const summary = list.map((c) => `• <b>${c.name}</b> (${c.type}): ${c.enabled ? '🟢 Aktif' : '⚪ Nonaktif'}`).join('\n');
+    const summary = list.map((c) => `• <b>${c.name}</b> (${c.type}): ${c.enabled ? '[Aktif]' : '[Nonaktif]'}`).join('\n');
     return {
       handled: true,
-      replyText: `🔌 <b>Daftar Universal Connectors Tersedia:</b>\n\n${summary}\n\nKunjungi Dashboard Web untuk mengonfigurasi atau menambahkan konektor baru secara mandiri!`,
+      replyText: `<b>Daftar Universal Connectors Tersedia:</b>\n\n${summary}\n\nKunjungi Dashboard Web untuk mengonfigurasi atau menambahkan konektor baru secara mandiri!`,
     };
   }
 

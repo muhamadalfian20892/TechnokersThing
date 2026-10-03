@@ -47,8 +47,21 @@ Sistem dirancang memenuhi standar aksesibilitas tertinggi **WCAG 2.1 Level AAA**
 
 ---
 
+## 🎙️ Dukungan Pesan Suara (Voice Message & Speech-to-Text)
+
+Bot mendukung pesan suara interaktif baik dari **Administrator** maupun **Pengguna**:
+- **Telegram Voice Notes & Audio**:
+  - Menerima rekaman suara instan (`voice`) dan berkas audio (`audio` seperti `.ogg`, `.opus`, `.mp3`, `.wav`).
+  - Ditenagai **Cloudflare Workers AI Whisper** (`@cf/openai/whisper` & `@cf/openai/whisper-large-v3-turbo`) dengan sistem *failover* multi-tier otomatis.
+  - **Transparansi Aksesibel**: Bot selalu menampilkan kutipan transkripsi teks sebelum memberikan jawaban AI, sehingga pengguna dan pembaca layar (*screen reader*) dapat memverifikasi isi ucapan yang dikenali.
+  - **Perintah Suara Alami**: Pengguna dapat berbicara santai untuk mengatur jadwal/pengingat (*"ingetin aku 15 menit lagi meeting"*), membaca berita (*"berita hari ini"*), atau mereset sesi (*"bersihkan riwayat chat"*).
+- **Web Dashboard Voice Input**:
+  - Tombol rekaman suara langsung di konsol web dashboard dengan kontrol aksesibilitas penuh (*aria-label*, status rekam visual berkontras tinggi, dan *keyboard navigation*).
+
+---
+
 ## 🔄 Dual AI Provider & Automatic Failover
 
-- **Cloudflare Workers AI**: Model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, dll.
+- **Cloudflare Workers AI**: Model `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`, Whisper speech recognition, dll.
 - **Backup OpenAI Provider** (`https://api.mrido1.my.id/v1`): Model `ag/gemini-3.8-flash-high`, `ag/claude-sonnet-4-6`, `xai/grok-4.6`, dll.
 - **Failover Otomatis**: Jika kuota harian Cloudflare habis, sistem otomatis beralih ke provider backup tanpa gagal.
